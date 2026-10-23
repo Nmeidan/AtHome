@@ -340,6 +340,13 @@ const player = new THREE.Group();
 const body = new THREE.Mesh(new THREE.CapsuleGeometry(CONFIG.playerRadius, 0.6, 4, 12), new THREE.MeshStandardMaterial({ color: 0xd2d2d2 }));
 body.castShadow = true;
 player.add(body);
+// black eyes on the front (+z) so you can see where the player faces; ghosts have light eyes
+const playerEyeMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+for (const sx of [-0.18, 0.18]) {
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), playerEyeMat);
+  eye.position.set(sx, 0.25, CONFIG.playerRadius * 0.92);
+  body.add(eye);
+}
 // ground shadow, same treatment as the ghosts so the hover reads from above
 const playerBlob = new THREE.Mesh(
   new THREE.CircleGeometry(CONFIG.playerRadius * 1.2, 24),
@@ -653,6 +660,9 @@ let best = 0;
 function render(alpha, now) {
   const s = state;
   player.position.set(s.px, 0, s.pz);
+  // face the mouse pointer (keeps the last heading when the pointer is right on the player)
+  const look = pointerSeen && pointerOnGround();
+  if (look && Math.hypot(look.x - s.px, look.z - s.pz) > 0.3) player.rotation.y = Math.atan2(look.x - s.px, look.z - s.pz);
   // hover: capsule bottom sits ~0.8 above the floor, bobbing out of phase with the ghosts
   const pbob = Math.sin(now / 340);
   body.position.y = 1.6 + pbob * 0.15;

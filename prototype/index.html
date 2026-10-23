@@ -66,7 +66,14 @@ const CONFIG = window.CONFIG = {
   levelsPerGhost: 2,     // one extra ghost every N levels above level 1
   fullHomeAt: 0.95,      // home counts as full at this fraction of maxRadius
   fullHomeLevelRate: 3,  // level climbs this many times faster while home is full
+  ghostSpeedEvery: 10,   // levels per ghost speed-up
+  ghostSpeedStep: 0.05,  // +5% ghost speed per step
 };
+
+// Ghosts get a little faster every ghostSpeedEvery levels
+function ghostSpeedAt(level) {
+  return CONFIG.ghostSpeed * (1 + CONFIG.ghostSpeedStep * Math.floor(level / CONFIG.ghostSpeedEvery));
+}
 
 // Difficulty rises with progress (time spent outside, sped up while home is full); no cap
 function levelAt(progress) {
@@ -434,7 +441,7 @@ function step(s, dt) {
     g.sees = canSee(g.x, g.z, s.px, s.pz);
     if (g.sees) { g.lastX = s.px; g.lastZ = s.pz; s.hidden = false; }
     let tx = g.lastX - g.x, tz = g.lastZ - g.z;
-    let speed = CONFIG.ghostSpeed;
+    let speed = ghostSpeedAt(s.level);
     if (!g.sees && tx * tx + tz * tz < 0.25) {
       // reached the last sighting and you're not there: wander
       tx = Math.cos(g.wander); tz = Math.sin(g.wander);

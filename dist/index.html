@@ -210,6 +210,33 @@ function canSee(ax, az, bx, bz) {
 // ---------- terrain decoration (visual only: walkable, doesn't block ghosts' view) ----------
 // Random layout per page load, kept clear of the largest possible home circle
 const stoneMat = new THREE.MeshStandardMaterial({ color: 0x5e5e5e });
+// See-through cutout: stone in front of the player is dithered away (ordered 4x4 Bayer, a raster
+// look) in a soft circle around the player on screen, so the player shows through
+const seeThrough = {
+  uPlayerPx: { value: new THREE.Vector2(-1e4, -1e4) },   // player position in drawing-buffer pixels
+  uPlayerDepth: { value: 0 },                            // player distance from camera (view space)
+  uRadiusPx: { value: 90 },
+};
+stoneMat.onBeforeCompile = shader => {
+  Object.assign(shader.uniforms, seeThrough);
+  shader.fragmentShader = `
+    uniform vec2 uPlayerPx;
+    uniform float uPlayerDepth;
+    uniform float uRadiusPx;
+    float bayer4(vec2 p) {
+      ivec2 i = ivec2(mod(p, 4.0));
+      const float m[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.);
+      return (m[i.x + i.y * 4] + 0.5) / 16.0;
+    }
+  ` + shader.fragmentShader.replace('#include <clipping_planes_fragment>', `
+    #include <clipping_planes_fragment>
+    {
+      float cut = 1.0 - smoothstep(uRadiusPx * 0.55, uRadiusPx, distance(gl_FragCoord.xy, uPlayerPx));
+      // only stone between the camera and the player; keep a quarter so the shape still reads
+      if (cut > 0.0 && vViewPosition.z < uPlayerDepth - 0.5 && bayer4(gl_FragCoord.xy) < cut * 0.75) discard;
+    }
+  `);
+};
 const hillMat = new THREE.MeshStandardMaterial({ color: 0x3c3c3c, flatShading: true });
 const rand = (a, b) => a + Math.random() * (b - a);
 function decorSpot(minR) {
@@ -424,6 +451,7 @@ function reset() {
 }
 reset();
 window.getState = () => state;   // debug: inspect the sim from devtools
+window.getScene = () => scene;   // debug: inspect scene objects from devtools
 
 // ---------- input ----------
 const keys = new Set();
@@ -651,6 +679,14 @@ function render(alpha, now) {
     overlay.querySelector('h1').textContent = 'Disqualified';
     overlay.classList.remove('hidden');
   }
+
+  // feed the stone see-through cutout: where the player body lands on screen, and how far away
+  camera.updateMatrixWorld();
+  const pw = new THREE.Vector3(s.px, body.position.y, s.pz);
+  seeThrough.uPlayerDepth.value = -pw.clone().applyMatrix4(camera.matrixWorldInverse).z;
+  const ndc = pw.project(camera), buf = renderer.getDrawingBufferSize(new THREE.Vector2());
+  seeThrough.uPlayerPx.value.set((ndc.x * 0.5 + 0.5) * buf.x, (ndc.y * 0.5 + 0.5) * buf.y);
+  seeThrough.uRadiusPx.value = 90 * renderer.getPixelRatio();
 
   renderer.render(scene, camera);
 }

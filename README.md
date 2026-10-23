@@ -11,10 +11,9 @@ Home is safe, but it shrinks while you're in it. Go outside to make it grow agai
 | WASD / arrows | Move |
 | Space | Start / pause |
 | R | Restart |
-| + / − | Circle change speed |
 | [ / ] | Number of ghosts |
 
-Circle speed and ghost count are remembered between games.
+The ghost count is remembered between games.
 
 ## Run it
 

@@ -8,7 +8,10 @@ Home is safe, but it shrinks while you're in it. Go outside to make it grow agai
 
 | Key | Action |
 |---|---|
-| WASD / arrows | Move |
+| Mouse | Aim: the player moves relative to the pointer |
+| W / ↑ | Move toward the pointer |
+| S / ↓ | Move away from the pointer |
+| A / D, ← / → | Strafe sideways |
 | Space | Start / pause |
 | R | Restart |
 | [ / ] | Number of ghosts |

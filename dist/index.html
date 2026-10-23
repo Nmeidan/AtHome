@@ -33,7 +33,7 @@
 <div id="overlay">
   <h1>@Home</h1>
   <p id="msg">Home is safe, but it shrinks while you're in it.<br>Go out to make it grow back — the further out, the faster it grows.<br>Don't let the ghosts touch you.</p>
-  <p><b style="color:var(--ink)">WASD / arrows</b> to move · <b style="color:var(--ink)">[ / ]</b> ghosts · <b style="color:var(--ink)">Space</b> to start / pause · <b style="color:var(--ink)">R</b> to restart</p>
+  <p><b style="color:var(--ink)">Mouse</b> to aim · <b style="color:var(--ink)">W / ↑</b> forward · <b style="color:var(--ink)">S / ↓</b> back ·<b style="color:var(--ink)">[ / ]</b> ghosts · <b style="color:var(--ink)">Space</b> to start / pause · <b style="color:var(--ink)">R</b> to restart</p>
 </div>
 
 <script type="importmap">
@@ -467,6 +467,20 @@ window.getScene = () => scene;   // debug: inspect scene objects from devtools
 
 // ---------- input ----------
 const keys = new Set();
+// Mouse pointer projected onto the ground: the player steers toward it
+const pointerNdc = new THREE.Vector2(0, 0);
+let pointerSeen = false;
+addEventListener('pointermove', e => {
+  pointerNdc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  pointerSeen = true;
+});
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const pointerRay = new THREE.Raycaster();
+const pointerGround = new THREE.Vector3();
+function pointerOnGround() {
+  pointerRay.setFromCamera(pointerNdc, camera);
+  return pointerRay.ray.intersectPlane(groundPlane, pointerGround);
+}
 addEventListener('keydown', e => {
   keys.add(e.code);
   if (e.code === 'Space') {
@@ -523,15 +537,26 @@ function step(s, dt) {
   if (!s.inside) s.levelProgress += dt * (s.homeFull ? CONFIG.fullHomeLevelRate : 1);
   s.level = levelAt(s.levelProgress);
 
-  // player movement
-  let ix = 0, iz = 0;
-  if (keys.has('KeyW') || keys.has('ArrowUp')) iz -= 1;
-  if (keys.has('KeyS') || keys.has('ArrowDown')) iz += 1;
-  if (keys.has('KeyA') || keys.has('ArrowLeft')) ix -= 1;
-  if (keys.has('KeyD') || keys.has('ArrowRight')) ix += 1;
-  const len = Math.hypot(ix, iz) || 1;
-  s.px = THREE.MathUtils.clamp(s.px + ix / len * CONFIG.playerSpeed * dt, -CONFIG.arena, CONFIG.arena);
-  s.pz = THREE.MathUtils.clamp(s.pz + iz / len * CONFIG.playerSpeed * dt, -CONFIG.arena, CONFIG.arena);
+  // player movement, relative to the mouse pointer: W/up toward it, S/down away, A/D strafe
+  const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+  const side = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+  const aim = pointerSeen && pointerOnGround();
+  if (aim && (fwd || side)) {
+    let ax = aim.x - s.px, az = aim.z - s.pz;
+    const dist = Math.hypot(ax, az);
+    if (dist > 1e-6) {
+      ax /= dist; az /= dist;
+      // stop on the pointer instead of jittering around it
+      const f = fwd > 0 && dist < 0.3 ? 0 : fwd;
+      let mx = ax * f - az * side, mz = az * f + ax * side;   // right of aim = (-az, ax)
+      const len = Math.hypot(mx, mz);
+      if (len > 0) {
+        const step = Math.min(CONFIG.playerSpeed * dt, fwd > 0 && !side ? dist : Infinity);
+        s.px = THREE.MathUtils.clamp(s.px + mx / len * step, -CONFIG.arena, CONFIG.arena);
+        s.pz = THREE.MathUtils.clamp(s.pz + mz / len * step, -CONFIG.arena, CONFIG.arena);
+      }
+    }
+  }
 
   // home radius: shrink inside, grow outside scaled by distance beyond the edge
   const pd = Math.hypot(s.px, s.pz);

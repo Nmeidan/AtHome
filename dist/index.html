@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@Home</title>
+<style>
+  /* black & white only */
+  :root { --ink: #f2f2f2; --dim: #8c8c8c; --home: #ffffff; --danger: #6e6e6e; --hidden: #b0b0b0; --bg: #1c1c1c; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; font-family: ui-monospace, Menlo, monospace; color: var(--ink); text-transform: uppercase; }
+  canvas { display: block; }
+  #hud { position: fixed; top: 16px; left: 16px; right: 16px; display: flex; gap: 24px; align-items: center; pointer-events: none; font-size: 14px; }
+  #bar { width: 200px; height: 10px; border: 1px solid var(--dim); border-radius: 5px; overflow: hidden; }
+  #barFill { height: 100%; width: 50%; background: var(--home); transition: background .2s; }
+  #where { font-weight: bold; letter-spacing: .1em; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(20,20,20,.72); text-align: center; padding: 16px; }
+  #overlay h1 { margin: 0; font-size: 48px; color: var(--home); }
+  #overlay p { margin: 0; color: var(--dim); max-width: 460px; line-height: 1.5; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <span>points <b id="points">0</b></span>
+  <span>time <span id="time">0.0</span>s</span>
+  <span>home <div id="bar" style="display:inline-block;vertical-align:middle"><div id="barFill"></div></div></span>
+  <span id="where">HOME</span>
+  <span>ghosts <span id="ghostCount">0</span>/<span id="ghostMax">5</span> <span style="color:var(--dim)">([ ])</span></span>
+  <span>circle speed ×<span id="rate">2.00</span> <span style="color:var(--dim)">(+/−)</span></span>
+</div>
+<div id="overlay">
+  <h1>@Home</h1>
+  <p id="msg">Home is safe, but it shrinks while you're in it.<br>Go out to make it grow back — the further out, the faster it grows.<br>Don't let the ghosts touch you. Furniture blocks their view: duck behind it to lose them.<br>Collect the points out in the open — the arrow shows the way. Each one grows your home.</p>
+  <p><b style="color:var(--ink)">WASD / arrows</b> to move · <b style="color:var(--ink)">+ / −</b> circle speed · <b style="color:var(--ink)">[ / ]</b> ghosts ·<b style="color:var(--ink)">Space</b> to start / pause · <b style="color:var(--ink)">R</b> to restart</p>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// Tuning knobs. Editable live from devtools: window.CONFIG.ghostSpeed = 6
+const CONFIG = window.CONFIG = {
+  arena: 38,
+  playerSpeed: 7,
+  playerRadius: 0.5,
+  startRadius: 6,
+  minRadius: 0.6,        // home never vanishes; at this size you're effectively exposed
+  maxRadius: 14,
+  shrinkRate: 0.4,       // units/s while inside
+  growK: 0.13,           // growth per second per unit of distance beyond the edge
+  growDistCap: 8,        // distance beyond which growth stops increasing
+  rateScale: 2,          // multiplies shrink + grow; adjust in-game with + / -
+  ghostSpeed: 4.6,
+  ghostRadius: 0.55,
+  ghostMax: 5,           // ghosts per run; adjust in-game with [ / ]
+  spawnEvery: 7,         // seconds
+  boredAfter: 3,         // seconds a ghost camps the edge before drifting off
+  pickupRadius: 0.6,
+  pickupMinFromPlayer: 8,
+  pickupBoost: 1.5,      // home radius gained per point collected
+};
+
+// Player-tuned settings survive restarts and page reloads
+const SAVED_KEYS = ['rateScale', 'ghostMax'];
+try { Object.assign(CONFIG, JSON.parse(localStorage.getItem('athome.settings')) ?? {}); } catch {}
+function saveSettings() {
+  try { localStorage.setItem('athome.settings', JSON.stringify(Object.fromEntries(SAVED_KEYS.map(k => [k, CONFIG[k]])))); } catch {}
+}
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x121212);
+scene.fog = new THREE.Fog(0x121212, 30, 60);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 200);
+const CAM_OFFSET = new THREE.Vector3(0, 20, 15);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x2a2a2a, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(10, 25, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40 });
+scene.add(sun);
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(CONFIG.arena * 2 + 4, CONFIG.arena * 2 + 4),
+  new THREE.MeshStandardMaterial({ color: 0x2a2a2a })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const grid = new THREE.GridHelper(CONFIG.arena * 2, 38, 0x363636, 0x363636);
+grid.position.y = 0.01;
+scene.add(grid);
+
+// ---------- home circle ----------
+const homeDisc = new THREE.Mesh(
+  new THREE.CircleGeometry(1, 96),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.08 })
+);
+homeDisc.rotation.x = -Math.PI / 2;
+homeDisc.position.y = 0.02;
+scene.add(homeDisc);
+
+// Border keeps a constant thin width as the circle resizes (geometry rebuilt on change, not scaled)
+const RING_WIDTH = 0.08;
+const homeRing = new THREE.Mesh(
+  new THREE.RingGeometry(1 - RING_WIDTH, 1, 128),
+  new THREE.MeshBasicMaterial({ color: 0xb0b0b0, transparent: true, opacity: 0.55, depthWrite: false })
+);
+homeRing.rotation.x = -Math.PI / 2;
+homeRing.position.y = 0.03;
+homeRing.userData.r = 1;
+scene.add(homeRing);
+function setRingRadius(r) {
+  if (Math.abs(r - homeRing.userData.r) < 0.005) return;
+  homeRing.geometry.dispose();
+  homeRing.geometry = new THREE.RingGeometry(Math.max(r - RING_WIDTH, 0), r, 128);
+  homeRing.userData.r = r;
+}
+
+// ---------- furniture (fixed; the ring shrinks past it) ----------
+// All furniture shares one color, like the original jam game
+const furnitureMat = new THREE.MeshStandardMaterial({ color: 0x444444 });   // dark gray
+function box(w, h, d, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), furnitureMat);
+  m.position.set(x, y, z);
+  m.castShadow = m.receiveShadow = true;
+  scene.add(m);
+  return m;
+}
+// Sight-blocking furniture: one XZ-plane AABB per piece (walkable, but ghosts can't see through it)
+const obstacles = [];
+function solid(...meshes) {
+  const b = new THREE.Box3();
+  for (const m of meshes) b.expandByObject(m);
+  obstacles.push({ minX: b.min.x, maxX: b.max.x, minZ: b.min.z, maxZ: b.max.z });
+}
+// rug (walkable)
+box(4.2, 0.04, 3, 0, 0.02, 0.4);
+// couch
+solid(
+  box(3, 0.5, 1, 0, 0.35, 2.4),
+  box(3, 0.8, 0.3, 0, 0.7, 2.85),
+  box(0.3, 0.7, 1, -1.5, 0.45, 2.4),
+  box(0.3, 0.7, 1, 1.5, 0.45, 2.4),
+);
+// TV + stand
+solid(box(2, 0.5, 0.6, 0, 0.25, -2.4), box(1.8, 1, 0.1, 0, 1.0, -2.4));
+// coffee table
+solid(box(1.4, 0.35, 0.8, 0, 0.18, 0.3));
+// lamp
+solid(box(0.12, 1.6, 0.12, 2.6, 0.8, 2.2), box(0.6, 0.4, 0.6, 2.6, 1.7, 2.2));
+// plant
+solid(box(0.5, 0.5, 0.5, -2.6, 0.25, -1.6), box(0.6, 0.8, 0.6, -2.6, 0.9, -1.6));
+
+// True if the segment a→b crosses no obstacle (slab test in XZ)
+function canSee(ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az;
+  for (const o of obstacles) {
+    let t0 = 0, t1 = 1;
+    let blocked = true;
+    for (const [p, d, lo, hi] of [[ax, dx, o.minX, o.maxX], [az, dz, o.minZ, o.maxZ]]) {
+      if (Math.abs(d) < 1e-9) {
+        if (p < lo || p > hi) { blocked = false; break; }
+      } else {
+        let ta = (lo - p) / d, tb = (hi - p) / d;
+        if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+        if (t0 > t1) { blocked = false; break; }
+      }
+    }
+    if (blocked) return false;
+  }
+  return true;
+}
+
+// ---------- player ----------
+const player = new THREE.Group();
+const body = new THREE.Mesh(new THREE.CapsuleGeometry(CONFIG.playerRadius, 0.6, 4, 12), new THREE.MeshStandardMaterial({ color: 0xd2d2d2 }));
+body.castShadow = true;
+player.add(body);
+// ground shadow, same treatment as the ghosts so the hover reads from above
+const playerBlob = new THREE.Mesh(
+  new THREE.CircleGeometry(CONFIG.playerRadius * 1.2, 24),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.45, depthWrite: false })
+);
+playerBlob.rotation.x = -Math.PI / 2;
+playerBlob.position.y = 0.03;
+player.add(playerBlob);
+scene.add(player);
+
+// ---------- ghosts ----------
+const GHOST_COLOR = 0x707070;   // all ghosts share one gray, a shade lighter than the furniture
+function makeGhostMesh() {
+  const g = new THREE.Group();
+  // own material per ghost so each can dim independently when it loses track of you
+  const mat = new THREE.MeshStandardMaterial({ color: GHOST_COLOR, emissive: GHOST_COLOR, emissiveIntensity: 0.25, side: THREE.DoubleSide });
+  const head = new THREE.Mesh(new THREE.SphereGeometry(CONFIG.ghostRadius, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+  head.position.y = 0.9;
+  // Pac-Man style zigzag hem: lift every other vertex on the bottom ring
+  const segs = 16;
+  const skirtGeo = new THREE.CylinderGeometry(CONFIG.ghostRadius, CONFIG.ghostRadius, 0.7, segs, 1, true);
+  const pos = skirtGeo.attributes.position;
+  for (let i = 0; i <= segs; i++) if (i % 2) pos.setY(segs + 1 + i, pos.getY(segs + 1 + i) + 0.2);
+  skirtGeo.computeVertexNormals();
+  const skirt = new THREE.Mesh(skirtGeo, mat);
+  skirt.position.y = 0.55;
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x969696 });   // lit, muted light gray
+  for (const sx of [-0.2, 0.2]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), eyeMat);
+    eye.position.set(sx, 0.95, CONFIG.ghostRadius * 0.85);
+    g.add(eye);
+  }
+  head.castShadow = skirt.castShadow = true;
+  g.add(head, skirt);
+  g.userData.mat = mat;
+  // soft contact shadow on the ground; makes the hover read from the top-down camera
+  const blob = new THREE.Mesh(
+    new THREE.CircleGeometry(CONFIG.ghostRadius * 1.1, 24),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.45, depthWrite: false })
+  );
+  blob.rotation.x = -Math.PI / 2;
+  g.add(blob);
+  g.userData.blob = blob;
+  scene.add(g);
+  return g;
+}
+
+// ---------- pickup (one at a time, Snake-style) + arrow pointing to it ----------
+const pickup = new THREE.Group();
+const gem = new THREE.Mesh(
+  new THREE.OctahedronGeometry(CONFIG.pickupRadius * 0.8),
+  new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.5 })
+);
+gem.castShadow = true;
+const gemBlob = new THREE.Mesh(
+  new THREE.CircleGeometry(CONFIG.pickupRadius, 24),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4, depthWrite: false })
+);
+gemBlob.rotation.x = -Math.PI / 2;
+gemBlob.position.y = 0.03;
+pickup.add(gem, gemBlob);
+pickup.visible = false;
+scene.add(pickup);
+
+// flat arrow on the floor orbiting the player; local -Z is its tip
+const arrowShape = new THREE.Shape([new THREE.Vector2(0, 0.45), new THREE.Vector2(-0.3, -0.25), new THREE.Vector2(0, -0.08), new THREE.Vector2(0.3, -0.25)]);
+const arrow = new THREE.Mesh(
+  new THREE.ShapeGeometry(arrowShape),
+  new THREE.MeshBasicMaterial({ color: 0xd2d2d2, transparent: true, opacity: 0.8, depthWrite: false })
+);
+arrow.rotation.x = -Math.PI / 2;
+arrow.position.set(0, 0.05, -1.6);
+const arrowPivot = new THREE.Group();
+arrowPivot.add(arrow);
+arrowPivot.visible = false;
+scene.add(arrowPivot);
+
+// ---------- simulation state (rendering only reads from this) ----------
+let state;
+function newState() {
+  return {
+    phase: 'title',      // title | playing | paused | over
+    t: 0,
+    radius: CONFIG.startRadius,
+    px: 0, pz: 0,
+    inside: true,
+    hidden: false,       // outside, and no ghost can see the player
+    ghosts: [],
+    spawnTimer: 0,
+    points: 0,
+    pickup: null,        // { x, z }
+  };
+}
+
+// Always outside even a max-size home, and not right next to the player
+function spawnPickup(s) {
+  const lim = CONFIG.arena - 2, minR = CONFIG.maxRadius + 2;
+  let x = 0, z = 0;
+  for (let i = 0; i < 100; i++) {
+    x = (Math.random() * 2 - 1) * lim;
+    z = (Math.random() * 2 - 1) * lim;
+    if (Math.hypot(x, z) >= minR && Math.hypot(x - s.px, z - s.pz) >= CONFIG.pickupMinFromPlayer) break;
+  }
+  s.pickup = { x, z };
+}
+
+function spawnGhost(s) {
+  const a = Math.random() * Math.PI * 2;
+  const d = 26 + Math.random() * 8;
+  const x = THREE.MathUtils.clamp(s.px + Math.cos(a) * d, -CONFIG.arena, CONFIG.arena);
+  const z = THREE.MathUtils.clamp(s.pz + Math.sin(a) * d, -CONFIG.arena, CONFIG.arena);
+  s.ghosts.push({ x, z, camp: 0, wander: Math.random() * Math.PI * 2, sees: true, lastX: s.px, lastZ: s.pz, mesh: makeGhostMesh() });
+}
+
+function reset() {
+  if (state) for (const g of state.ghosts) scene.remove(g.mesh);
+  state = newState();
+}
+reset();
+window.getState = () => state;   // debug: inspect the sim from devtools
+
+// ---------- input ----------
+const keys = new Set();
+addEventListener('keydown', e => {
+  keys.add(e.code);
+  if (e.code === 'Space') {
+    if (state.phase === 'playing') pause(true);
+    else if (state.phase === 'paused') pause(false);
+    else start();
+  }
+  if (e.code === 'KeyR') start();
+  // e.code = physical key, so these work on any keyboard layout (e.g. Hebrew)
+  if (e.code === 'Equal' || e.code === 'NumpadAdd') CONFIG.rateScale = Math.min(CONFIG.rateScale * 1.25, 10);
+  if (e.code === 'Minus' || e.code === 'NumpadSubtract') CONFIG.rateScale = Math.max(CONFIG.rateScale / 1.25, 0.25);
+  if (e.code === 'BracketRight') setGhostMax(CONFIG.ghostMax + 1);
+  if (e.code === 'BracketLeft') setGhostMax(CONFIG.ghostMax - 1);
+  if (['Equal', 'NumpadAdd', 'Minus', 'NumpadSubtract', 'BracketRight', 'BracketLeft'].includes(e.code)) saveSettings();
+});
+
+function pause(on) {
+  state.phase = on ? 'paused' : 'playing';
+  overlay.querySelector('h1').textContent = 'Paused';
+  msg.textContent = 'Press Space to resume.';
+  overlay.classList.toggle('hidden', !on);
+}
+
+// Change the ghost cap; takes effect immediately mid-run
+function setGhostMax(n) {
+  CONFIG.ghostMax = THREE.MathUtils.clamp(n, 1, 20);
+  if (state.phase !== 'playing' && state.phase !== 'paused') return;
+  while (state.ghosts.length < CONFIG.ghostMax) spawnGhost(state);
+  while (state.ghosts.length > CONFIG.ghostMax) {
+    // drop the ghost furthest from the player
+    let far = 0, farD = -1;
+    state.ghosts.forEach((g, i) => {
+      const d = (g.x - state.px) ** 2 + (g.z - state.pz) ** 2;
+      if (d > farD) { farD = d; far = i; }
+    });
+    scene.remove(state.ghosts.splice(far, 1)[0].mesh);
+  }
+}
+addEventListener('keyup', e => keys.delete(e.code));
+
+function start() {
+  reset();
+  state.phase = 'playing';
+  for (let i = 0; i < CONFIG.ghostMax; i++) spawnGhost(state);
+  spawnPickup(state);
+  overlay.classList.add('hidden');
+}
+
+// ---------- fixed-step sim ----------
+const DT = 1 / 60;
+function step(s, dt) {
+  if (s.phase !== 'playing') return;
+  s.t += dt;
+
+  // player movement
+  let ix = 0, iz = 0;
+  if (keys.has('KeyW') || keys.has('ArrowUp')) iz -= 1;
+  if (keys.has('KeyS') || keys.has('ArrowDown')) iz += 1;
+  if (keys.has('KeyA') || keys.has('ArrowLeft')) ix -= 1;
+  if (keys.has('KeyD') || keys.has('ArrowRight')) ix += 1;
+  const len = Math.hypot(ix, iz) || 1;
+  s.px = THREE.MathUtils.clamp(s.px + ix / len * CONFIG.playerSpeed * dt, -CONFIG.arena, CONFIG.arena);
+  s.pz = THREE.MathUtils.clamp(s.pz + iz / len * CONFIG.playerSpeed * dt, -CONFIG.arena, CONFIG.arena);
+
+  // home radius: shrink inside, grow outside scaled by distance beyond the edge
+  const pd = Math.hypot(s.px, s.pz);
+  s.inside = pd < s.radius;
+  if (s.inside) {
+    s.radius -= CONFIG.shrinkRate * CONFIG.rateScale * dt;
+  } else {
+    const beyond = Math.min(pd - s.radius, CONFIG.growDistCap);
+    const easeNearMax = 1 - (s.radius / CONFIG.maxRadius) ** 2;   // no "win by parking" at max
+    s.radius += CONFIG.growK * beyond * easeNearMax * CONFIG.rateScale * dt;
+  }
+  // collect the point: score, home boost, next one spawns elsewhere
+  const pr = CONFIG.playerRadius + CONFIG.pickupRadius;
+  if (s.pickup && (s.pickup.x - s.px) ** 2 + (s.pickup.z - s.pz) ** 2 < pr * pr) {
+    s.points++;
+    s.radius += CONFIG.pickupBoost;
+    spawnPickup(s);
+  }
+  s.radius = THREE.MathUtils.clamp(s.radius, CONFIG.minRadius, CONFIG.maxRadius);
+
+  // spawning
+  s.spawnTimer += dt;
+  if (s.spawnTimer >= CONFIG.spawnEvery && s.ghosts.length < CONFIG.ghostMax) {
+    s.spawnTimer = 0;
+    spawnGhost(s);
+  }
+
+  // ghosts: chase what they can see, search where they last saw you, wander otherwise;
+  // can't enter home; get bored camping the edge
+  const keepOut = s.radius + CONFIG.ghostRadius;
+  s.hidden = !s.inside;
+  for (const g of s.ghosts) {
+    g.wander += (Math.random() - 0.5) * 2 * dt;
+    g.sees = canSee(g.x, g.z, s.px, s.pz);
+    if (g.sees) { g.lastX = s.px; g.lastZ = s.pz; s.hidden = false; }
+    let tx = g.lastX - g.x, tz = g.lastZ - g.z;
+    let speed = CONFIG.ghostSpeed;
+    if (!g.sees && tx * tx + tz * tz < 0.25) {
+      // reached the last sighting and you're not there: wander
+      tx = Math.cos(g.wander); tz = Math.sin(g.wander);
+      speed *= 0.5;
+    }
+    if (s.inside) {
+      const gd = Math.hypot(g.x, g.z);
+      if (gd < keepOut + 1.5) g.camp += dt; else g.camp = Math.max(0, g.camp - dt);
+      if (g.camp > CONFIG.boredAfter) {
+        // drift away from home along its wander heading
+        tx = Math.cos(g.wander) + g.x / (gd || 1);
+        tz = Math.sin(g.wander) + g.z / (gd || 1);
+        speed *= 0.5;
+      }
+    } else {
+      g.camp = 0;
+    }
+    const tl = Math.hypot(tx, tz) || 1;
+    g.x += tx / tl * speed * dt;
+    g.z += tz / tl * speed * dt;
+
+    const gd = Math.hypot(g.x, g.z);
+    if (gd < keepOut) {
+      const k = keepOut / (gd || 1);
+      g.x *= k; g.z *= k;
+    }
+
+    const hit = CONFIG.playerRadius + CONFIG.ghostRadius;
+    if ((g.x - s.px) ** 2 + (g.z - s.pz) ** 2 < hit * hit) {
+      s.phase = 'over';
+    }
+  }
+
+  // ghosts shouldn't stack on each other
+  for (let i = 0; i < s.ghosts.length; i++) for (let j = i + 1; j < s.ghosts.length; j++) {
+    const a = s.ghosts[i], b = s.ghosts[j];
+    const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz), min = CONFIG.ghostRadius * 2.2;
+    if (d > 0 && d < min) {
+      const push = (min - d) / 2 / d;
+      a.x -= dx * push; a.z -= dz * push; b.x += dx * push; b.z += dz * push;
+    }
+  }
+}
+
+// ---------- render ----------
+const overlay = document.getElementById('overlay');
+const msg = document.getElementById('msg');
+const timeEl = document.getElementById('time');
+const barFill = document.getElementById('barFill');
+const whereEl = document.getElementById('where');
+const ghostCountEl = document.getElementById('ghostCount');
+const rateEl = document.getElementById('rate');
+const ghostMaxEl = document.getElementById('ghostMax');
+const pointsEl = document.getElementById('points');
+let best = 0;
+
+function render(alpha, now) {
+  const s = state;
+  player.position.set(s.px, 0, s.pz);
+  // hover: capsule bottom sits ~0.8 above the floor, bobbing out of phase with the ghosts
+  const pbob = Math.sin(now / 340);
+  body.position.y = 1.6 + pbob * 0.15;
+  playerBlob.scale.setScalar(1 - pbob * 0.12);
+  playerBlob.material.opacity = 0.4 - pbob * 0.08;
+  homeDisc.scale.setScalar(s.radius);
+  setRingRadius(s.radius);
+  homeRing.material.color.setHex(s.radius < 2 ? 0x5a5a5a : 0xb0b0b0);   // dims when home is nearly gone
+
+  for (const g of s.ghosts) {
+    // hover well off the ground with a slow bob; the blob shadow stays on the floor and breathes with height
+    const bob = Math.sin(now / 300 + g.wander);
+    const hy = 0.9 + bob * 0.2;
+    g.mesh.position.set(g.x, hy, g.z);
+    const blob = g.mesh.userData.blob;
+    blob.position.y = -hy + 0.03;
+    blob.scale.setScalar(1 - bob * 0.15);
+    blob.material.opacity = 0.4 - bob * 0.1;
+    g.mesh.lookAt(g.sees ? s.px : g.lastX, g.mesh.position.y, g.sees ? s.pz : g.lastZ);
+    g.mesh.userData.mat.emissiveIntensity = g.sees ? 0.35 : 0.0;   // dim = lost track of you
+  }
+
+  pickup.visible = !!s.pickup;
+  arrowPivot.visible = false;
+  if (s.pickup) {
+    const gbob = Math.sin(now / 280);
+    pickup.position.set(s.pickup.x, 0, s.pickup.z);
+    gem.position.y = 1.0 + gbob * 0.15;
+    gem.rotation.y = now / 600;
+    gemBlob.scale.setScalar(1 - gbob * 0.12);
+    // arrow points from the player toward the point; hidden once you're close
+    const dx = s.pickup.x - s.px, dz = s.pickup.z - s.pz, d = Math.hypot(dx, dz);
+    if (d > 4) {
+      arrowPivot.visible = true;
+      arrowPivot.position.set(s.px, 0, s.pz);
+      arrowPivot.rotation.y = Math.atan2(-dx, -dz);
+    }
+  }
+
+  const target = new THREE.Vector3(s.px, 0, s.pz);
+  camera.position.lerp(target.clone().add(CAM_OFFSET), 0.08);
+  camera.lookAt(camera.position.clone().sub(CAM_OFFSET));
+
+  timeEl.textContent = s.t.toFixed(1);
+  barFill.style.width = `${(s.radius - CONFIG.minRadius) / (CONFIG.maxRadius - CONFIG.minRadius) * 100}%`;
+  barFill.style.background = s.radius < 2 ? 'var(--danger)' : 'var(--home)';
+  whereEl.textContent = s.inside ? 'HOME' : s.hidden ? 'HIDDEN' : 'OUTSIDE';
+  whereEl.style.color = s.inside ? 'var(--home)' : s.hidden ? 'var(--hidden)' : 'var(--danger)';
+  ghostCountEl.textContent = s.ghosts.length;
+  pointsEl.textContent = s.points;
+  rateEl.textContent = CONFIG.rateScale.toFixed(2);
+  ghostMaxEl.textContent = CONFIG.ghostMax;
+
+  if (s.phase === 'over' && overlay.classList.contains('hidden')) {
+    best = Math.max(best, s.points);
+    msg.innerHTML = `<b style="color:var(--ink)">${s.points} points</b> in ${s.t.toFixed(1)}s. Best: ${best} points`;
+    overlay.querySelector('h1').textContent = 'Disqualified';
+    overlay.classList.remove('hidden');
+  }
+
+  renderer.render(scene, camera);
+}
+
+let last = performance.now(), acc = 0;
+camera.position.copy(CAM_OFFSET);
+function frame(now) {
+  acc += Math.min((now - last) / 1000, 0.25);
+  last = now;
+  while (acc >= DT) { step(state, DT); acc -= DT; }
+  render(acc / DT, now);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

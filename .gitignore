@@ -1,0 +1,6 @@
+.DS_Store
+.claude/
+# itch.io upload; rebuild from dist/
+*.zip
+# originals from the GGJ archive (scheduled download)
+ggj2019-original/

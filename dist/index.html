@@ -333,12 +333,13 @@ function mountainPeak(x, z, r, h) {
   peak.castShadow = peak.receiveShadow = true;
   scene.add(peak);
 }
+const MOUNTAIN_HEIGHT = 1.8;   // stretches every peak upward by the same factor; footprint unchanged
 for (let i = 0; i < 12; i++) {
   const [x, z] = decorSpot(clear);
   const peaks = 1 + Math.floor(rand(0, 4));
   for (let k = 0; k < peaks; k++) {
     const h = k === 0 ? rand(1.6, 2.6) : rand(0.8, 1.8);   // tallest peak first, smaller ones around it
-    mountainPeak(x + rand(-1.5, 1.5) * (k > 0), z + rand(-1.5, 1.5) * (k > 0), h * rand(0.55, 0.8), h);
+    mountainPeak(x + rand(-1.5, 1.5) * (k > 0), z + rand(-1.5, 1.5) * (k > 0), h * rand(0.55, 0.8), h * MOUNTAIN_HEIGHT);
   }
 }
 // rubble

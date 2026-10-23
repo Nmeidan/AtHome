@@ -30,6 +30,7 @@ jobs:
               prototype/index.html > build/index.html
           grep -q '"three": "./three.module.js"' build/index.html
           cp dist/three.module.js build/
+          cp -R prototype/fonts build/
 
       - name: Install butler
         run: |

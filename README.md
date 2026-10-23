@@ -29,5 +29,7 @@ python3 -m http.server 8417 --directory prototype
 To build the itch.io upload zip:
 
 ```bash
-cd dist && zip -X ../athome-itch.zip index.html three.module.js
+cd dist && zip -X -r ../athome-itch.zip index.html three.module.js fonts
 ```
+
+The title font is Michroma, bundled in `prototype/fonts/` under the SIL Open Font License (`OFL.txt`).

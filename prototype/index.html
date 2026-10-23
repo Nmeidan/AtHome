@@ -314,16 +314,32 @@ for (let i = 0; i < 8; i++) {
   wall.rotation.y = rand(0, Math.PI);
   scene.add(wall);
 }
-// low hills: flattened half-spheres, kept under the hovering player and ghosts
+// small low-poly mountains: clusters of jagged, flat-shaded peaks
+function mountainPeak(x, z, r, h) {
+  const geo = new THREE.ConeGeometry(r, h, 5 + Math.floor(rand(0, 3)), 2);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    if (y > h / 2 - 1e-3) continue;   // keep the summit a sharp point
+    const k = y < -h / 2 + 1e-3 ? 0.25 : 0.35;   // jitter the base less so it stays on the ground
+    pos.setX(i, pos.getX(i) + rand(-k, k) * r);
+    pos.setZ(i, pos.getZ(i) + rand(-k, k) * r);
+    if (y > -h / 2 + 1e-3) pos.setY(i, y + rand(-0.15, 0.15) * h);
+  }
+  geo.computeVertexNormals();
+  const peak = new THREE.Mesh(geo, hillMat);
+  peak.position.set(x, h / 2, z);
+  peak.rotation.y = rand(0, Math.PI * 2);
+  peak.castShadow = peak.receiveShadow = true;
+  scene.add(peak);
+}
 for (let i = 0; i < 12; i++) {
-  const [x, z] = decorSpot(clear - 2);
-  const hill = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 6, 0, Math.PI * 2, 0, Math.PI / 2), hillMat);
-  const r = rand(2.5, 5);
-  hill.scale.set(r, rand(0.5, 0.8), r * rand(0.6, 1));
-  hill.rotation.y = rand(0, Math.PI);
-  hill.position.set(x, 0, z);
-  hill.receiveShadow = true;
-  scene.add(hill);
+  const [x, z] = decorSpot(clear);
+  const peaks = 1 + Math.floor(rand(0, 4));
+  for (let k = 0; k < peaks; k++) {
+    const h = k === 0 ? rand(1.6, 2.6) : rand(0.8, 1.8);   // tallest peak first, smaller ones around it
+    mountainPeak(x + rand(-1.5, 1.5) * (k > 0), z + rand(-1.5, 1.5) * (k > 0), h * rand(0.55, 0.8), h);
+  }
 }
 // rubble
 const rubbleGeo = new THREE.DodecahedronGeometry(1);

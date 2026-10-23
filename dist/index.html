@@ -23,6 +23,7 @@
 <div id="hud">
   <span>points <b id="points">0</b></span>
   <span>time <span id="time">0.0</span>s</span>
+  <span>level <b id="level">1</b><span style="color:var(--dim)">/<span id="levelMax">10</span></span></span>
   <span>home <div id="bar" style="display:inline-block;vertical-align:middle"><div id="barFill"></div></div></span>
   <span id="where">HOME</span>
   <span>ghosts <span id="ghostCount">0</span>/<span id="ghostMax">5</span> <span style="color:var(--dim)">([ ])</span></span>
@@ -30,7 +31,7 @@
 </div>
 <div id="overlay">
   <h1>@Home</h1>
-  <p id="msg">Home is safe, but it shrinks while you're in it.<br>Go out to make it grow back — the further out, the faster it grows.<br>Don't let the ghosts touch you. Furniture blocks their view: duck behind it to lose them.<br>Collect the points out in the open — the arrow shows the way. Each one grows your home.</p>
+  <p id="msg">Home is safe, but it shrinks while you're in it.<br>Go out to make it grow back — the further out, the faster it grows.<br>Don't let the ghosts touch you. Furniture blocks their view: duck behind it to lose them.<br>Collect the points out in the open — the arrow shows the way. Each one grows your home.<br>The longer you survive, the higher the level, and the more ghosts come.</p>
   <p><b style="color:var(--ink)">WASD / arrows</b> to move · <b style="color:var(--ink)">+ / −</b> circle speed · <b style="color:var(--ink)">[ / ]</b> ghosts ·<b style="color:var(--ink)">Space</b> to start / pause · <b style="color:var(--ink)">R</b> to restart</p>
 </div>
 
@@ -60,7 +61,20 @@ const CONFIG = window.CONFIG = {
   pickupRadius: 0.6,
   pickupMinFromPlayer: 8,
   pickupBoost: 1.5,      // home radius gained per point collected
+  levelMin: 1,
+  levelMax: 10,
+  levelEvery: 20,        // seconds survived per difficulty level
+  levelsPerGhost: 2,     // one extra ghost every N levels above the minimum
 };
+
+// Difficulty rises with time survived, clamped to [levelMin, levelMax]
+function levelAt(t) {
+  return Math.min(CONFIG.levelMax, CONFIG.levelMin + Math.floor(t / CONFIG.levelEvery));
+}
+// Your [ / ] setting is the base; difficulty adds ghosts on top of it
+function ghostTarget(s) {
+  return Math.min(20, CONFIG.ghostMax + Math.floor((s.level - CONFIG.levelMin) / CONFIG.levelsPerGhost));
+}
 
 // Player-tuned settings survive restarts and page reloads
 const SAVED_KEYS = ['rateScale', 'ghostMax'];
@@ -273,6 +287,7 @@ function newState() {
   return {
     phase: 'title',      // title | playing | paused | over
     t: 0,
+    level: CONFIG.levelMin,
     radius: CONFIG.startRadius,
     px: 0, pz: 0,
     inside: true,
@@ -340,8 +355,8 @@ function pause(on) {
 function setGhostMax(n) {
   CONFIG.ghostMax = THREE.MathUtils.clamp(n, 1, 20);
   if (state.phase !== 'playing' && state.phase !== 'paused') return;
-  while (state.ghosts.length < CONFIG.ghostMax) spawnGhost(state);
-  while (state.ghosts.length > CONFIG.ghostMax) {
+  while (state.ghosts.length < ghostTarget(state)) spawnGhost(state);
+  while (state.ghosts.length > ghostTarget(state)) {
     // drop the ghost furthest from the player
     let far = 0, farD = -1;
     state.ghosts.forEach((g, i) => {
@@ -366,6 +381,7 @@ const DT = 1 / 60;
 function step(s, dt) {
   if (s.phase !== 'playing') return;
   s.t += dt;
+  s.level = levelAt(s.t);
 
   // player movement
   let ix = 0, iz = 0;
@@ -398,7 +414,7 @@ function step(s, dt) {
 
   // spawning
   s.spawnTimer += dt;
-  if (s.spawnTimer >= CONFIG.spawnEvery && s.ghosts.length < CONFIG.ghostMax) {
+  if (s.spawnTimer >= CONFIG.spawnEvery && s.ghosts.length < ghostTarget(s)) {
     s.spawnTimer = 0;
     spawnGhost(s);
   }
@@ -467,6 +483,8 @@ const ghostCountEl = document.getElementById('ghostCount');
 const rateEl = document.getElementById('rate');
 const ghostMaxEl = document.getElementById('ghostMax');
 const pointsEl = document.getElementById('points');
+const levelEl = document.getElementById('level');
+const levelMaxEl = document.getElementById('levelMax');
 let best = 0;
 
 function render(alpha, now) {
@@ -523,11 +541,13 @@ function render(alpha, now) {
   ghostCountEl.textContent = s.ghosts.length;
   pointsEl.textContent = s.points;
   rateEl.textContent = CONFIG.rateScale.toFixed(2);
-  ghostMaxEl.textContent = CONFIG.ghostMax;
+  ghostMaxEl.textContent = s.phase === 'title' ? CONFIG.ghostMax : ghostTarget(s);
+  levelEl.textContent = s.level;
+  levelMaxEl.textContent = CONFIG.levelMax;
 
   if (s.phase === 'over' && overlay.classList.contains('hidden')) {
     best = Math.max(best, s.points);
-    msg.innerHTML = `<b style="color:var(--ink)">${s.points} points</b> in ${s.t.toFixed(1)}s. Best: ${best} points`;
+    msg.innerHTML = `<b style="color:var(--ink)">${s.points} points</b> in ${s.t.toFixed(1)}s, reached level ${s.level}. Best: ${best} points`;
     overlay.querySelector('h1').textContent = 'Disqualified';
     overlay.classList.remove('hidden');
   }

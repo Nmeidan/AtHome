@@ -1,0 +1,44 @@
+# Publish the game to https://nmeidan.itch.io/athome on every push to main.
+# Needs the repo secret BUTLER_API_KEY (itch.io → Settings → API keys).
+name: Publish to itch.io
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "prototype/**"
+      - "dist/three.module.js"
+      - ".github/workflows/itch.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: itch-publish
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same build as the local dist/: the prototype page with Three.js served from the bundle
+      - name: Build web bundle
+        run: |
+          mkdir -p build
+          sed -e 's#"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"#"three": "./three.module.js"#' \
+              -e 's#<title>@Home Prototype</title>#<title>@Home</title>#' \
+              prototype/index.html > build/index.html
+          grep -q '"three": "./three.module.js"' build/index.html
+          cp dist/three.module.js build/
+
+      - name: Install butler
+        run: |
+          curl -sSfL -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip -d butler
+          chmod +x butler/butler
+          ./butler/butler -V
+
+      - name: Push to itch.io
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: ./butler/butler push build nmeidan/athome:html5 --userversion "${GITHUB_SHA::7}"

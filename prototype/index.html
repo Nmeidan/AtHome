@@ -283,7 +283,7 @@ const arrow = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ color: 0xd2d2d2, transparent: true, opacity: 0.8, depthWrite: false })
 );
 arrow.rotation.x = -Math.PI / 2;
-arrow.position.set(0, 0.05, -1.6);
+arrow.position.set(0, 0.05, -2.8);   // far enough that the hovering player never covers it
 const arrowPivot = new THREE.Group();
 arrowPivot.add(arrow);
 arrowPivot.visible = false;

@@ -151,9 +151,43 @@ function setRingRadius(r) {
   homeRing.userData.r = r;
 }
 
+// ---------- see-through cutout ----------
+// Scenery in front of the player is dithered away (ordered 4x4 Bayer, a raster look) inside a
+// hard-edged circle around the player on screen, so the player shows through
+const seeThrough = {
+  uPlayerPx: { value: new THREE.Vector2(-1e4, -1e4) },   // player position in drawing-buffer pixels
+  uPlayerDepth: { value: 0 },                            // player distance from camera (view space)
+  uRadiusPx: { value: 90 },
+};
+function addSeeThrough(mat) {
+  mat.onBeforeCompile = shader => {
+    Object.assign(shader.uniforms, seeThrough);
+    shader.fragmentShader = `
+      uniform vec2 uPlayerPx;
+      uniform float uPlayerDepth;
+      uniform float uRadiusPx;
+      float bayer4(vec2 p) {
+        ivec2 i = ivec2(mod(p, 4.0));
+        const float m[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.);
+        return (m[i.x + i.y * 4] + 0.5) / 16.0;
+      }
+    ` + shader.fragmentShader.replace('#include <clipping_planes_fragment>', `
+      #include <clipping_planes_fragment>
+      {
+        // sharp edge: same dither density everywhere inside the circle, none outside
+        bool inCircle = distance(gl_FragCoord.xy, uPlayerPx) < uRadiusPx;
+        // scenery in front of the player or level with it (so pieces passing through the body dot too);
+        // drop ~30% of pixels (5 of 16) = light dithered transparency
+        if (inCircle && vViewPosition.z < uPlayerDepth + 0.6 && bayer4(gl_FragCoord.xy) < 0.3) discard;
+      }
+    `);
+  };
+  return mat;
+}
+
 // ---------- furniture (fixed; the ring shrinks past it) ----------
 // All furniture shares one color, like the original jam game
-const furnitureMat = new THREE.MeshStandardMaterial({ color: 0x444444 });   // dark gray
+const furnitureMat = addSeeThrough(new THREE.MeshStandardMaterial({ color: 0x444444 }));   // dark gray
 function box(w, h, d, x, y, z) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), furnitureMat);
   m.position.set(x, y, z);
@@ -209,35 +243,8 @@ function canSee(ax, az, bx, bz) {
 
 // ---------- terrain decoration (visual only: walkable, doesn't block ghosts' view) ----------
 // Random layout per page load, kept clear of the largest possible home circle
-const stoneMat = new THREE.MeshStandardMaterial({ color: 0x5e5e5e });
-// See-through cutout: stone in front of the player is dithered away (ordered 4x4 Bayer, a raster
-// look) in a soft circle around the player on screen, so the player shows through
-const seeThrough = {
-  uPlayerPx: { value: new THREE.Vector2(-1e4, -1e4) },   // player position in drawing-buffer pixels
-  uPlayerDepth: { value: 0 },                            // player distance from camera (view space)
-  uRadiusPx: { value: 90 },
-};
-stoneMat.onBeforeCompile = shader => {
-  Object.assign(shader.uniforms, seeThrough);
-  shader.fragmentShader = `
-    uniform vec2 uPlayerPx;
-    uniform float uPlayerDepth;
-    uniform float uRadiusPx;
-    float bayer4(vec2 p) {
-      ivec2 i = ivec2(mod(p, 4.0));
-      const float m[16] = float[16](0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.);
-      return (m[i.x + i.y * 4] + 0.5) / 16.0;
-    }
-  ` + shader.fragmentShader.replace('#include <clipping_planes_fragment>', `
-    #include <clipping_planes_fragment>
-    {
-      float cut = 1.0 - smoothstep(uRadiusPx * 0.55, uRadiusPx, distance(gl_FragCoord.xy, uPlayerPx));
-      // only stone between the camera and the player; keep a quarter so the shape still reads
-      if (cut > 0.0 && vViewPosition.z < uPlayerDepth - 0.5 && bayer4(gl_FragCoord.xy) < cut * 0.75) discard;
-    }
-  `);
-};
-const hillMat = new THREE.MeshStandardMaterial({ color: 0x3c3c3c, flatShading: true });
+const stoneMat = addSeeThrough(new THREE.MeshStandardMaterial({ color: 0x5e5e5e }));
+const hillMat = addSeeThrough(new THREE.MeshStandardMaterial({ color: 0x3c3c3c, flatShading: true }));
 const rand = (a, b) => a + Math.random() * (b - a);
 function decorSpot(minR) {
   for (let i = 0; i < 50; i++) {

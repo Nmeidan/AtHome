@@ -734,7 +734,7 @@ function render(alpha, now) {
   if (s.phase === 'over' && overlay.classList.contains('hidden')) {
     best = Math.max(best, s.points);
     msg.innerHTML = `<b style="color:var(--ink)">${s.points} points</b> in ${s.t.toFixed(1)}s, reached level ${s.level}. Best: ${best} points`;
-    overlay.querySelector('h1').textContent = 'Disqualified';
+    overlay.querySelector('h1').textContent = 'You lost';
     overlay.classList.remove('hidden');
   }
 

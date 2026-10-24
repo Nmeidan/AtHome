@@ -28,12 +28,12 @@
   <span>level <b id="level">2</b></span>
   <span>home <div id="bar" style="display:inline-block;vertical-align:middle"><div id="barFill"></div></div></span>
   <span id="where">HOME</span>
-  <span>ghosts <span id="ghostCount">0</span>/<span id="ghostMax">5</span></span>
+  <span>ghosts <span id="ghostCount">0</span></span>
 </div>
 <div id="overlay">
   <h1>@Home</h1>
   <p id="msg">Home is safe, but it shrinks while you're in it.<br>Go out to make it grow back — the further out, the faster it grows.<br>Don't let the ghosts touch you.</p>
-  <p><b style="color:var(--ink)">Mouse</b> to aim · <b style="color:var(--ink)">W / ↑</b> forward · <b style="color:var(--ink)">S / ↓</b> back ·<b style="color:var(--ink)">[ / ]</b> ghosts · <b style="color:var(--ink)">Space</b> to start / pause · <b style="color:var(--ink)">R</b> to restart</p>
+  <p><b style="color:var(--ink)">Mouse</b> to aim · <b style="color:var(--ink)">W / ↑</b> forward · <b style="color:var(--ink)">S / ↓</b> back · <b style="color:var(--ink)">Space</b> to start / pause · <b style="color:var(--ink)">R</b> to restart</p>
 </div>
 
 <script type="importmap">
@@ -669,7 +669,6 @@ const timeEl = document.getElementById('time');
 const barFill = document.getElementById('barFill');
 const whereEl = document.getElementById('where');
 const ghostCountEl = document.getElementById('ghostCount');
-const ghostMaxEl = document.getElementById('ghostMax');
 const pointsEl = document.getElementById('points');
 const levelEl = document.getElementById('level');
 let best = 0;
@@ -730,7 +729,6 @@ function render(alpha, now) {
   whereEl.style.color = s.inside ? 'var(--home)' : s.hidden ? 'var(--hidden)' : 'var(--danger)';
   ghostCountEl.textContent = s.ghosts.length;
   pointsEl.textContent = s.points;
-  ghostMaxEl.textContent = s.phase === 'title' ? CONFIG.ghostMax : ghostTarget(s);
   levelEl.textContent = s.level + (s.homeFull && !s.inside ? ' »' : '');   // » = climbing fast
 
   if (s.phase === 'over' && overlay.classList.contains('hidden')) {

@@ -164,6 +164,126 @@ function setRingRadius(r) {
   homeRing.userData.r = r;
 }
 
+// ---------- border particles: soft glowing dots that spread sideways from the home circle and fade ----------
+// Sprite drawn as vector paths on a canvas: a soft round glow with a faint blurred star inside
+function makeStarTexture() {
+  const S = 128, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  const star = (outer, inner) => {
+    g.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = i * Math.PI / 4 - Math.PI / 2, r = i % 2 ? inner : outer;
+      const x = S / 2 + Math.cos(a) * r, y = S / 2 + Math.sin(a) * r;
+      if (i === 0) g.moveTo(x, y);
+      else {
+        // curve each edge in toward the centre so the points are slender
+        const pa = a - Math.PI / 8, pr = (i % 2 ? outer : inner) * 0.35;
+        g.quadraticCurveTo(S / 2 + Math.cos(pa) * pr, S / 2 + Math.sin(pa) * pr, x, y);
+      }
+    }
+    g.quadraticCurveTo(S / 2 + Math.cos(-Math.PI / 2 - Math.PI / 8) * inner * 0.35, S / 2 + Math.sin(-Math.PI / 2 - Math.PI / 8) * inner * 0.35, S / 2, S / 2 - outer);
+    g.closePath();
+    g.fill();
+  };
+  // mostly a soft round dot: a wide radial halo carries the shape...
+  const halo = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  halo.addColorStop(0, 'rgba(255,255,255,0.9)');
+  halo.addColorStop(0.25, 'rgba(255,255,255,0.45)');
+  halo.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = halo;
+  g.fillRect(0, 0, S, S);
+  // ...with only a faint, heavily blurred star inside it
+  g.fillStyle = '#ffffff';
+  g.shadowColor = '#ffffff';
+  g.shadowBlur = 20;
+  g.globalAlpha = 0.35;
+  star(34, 10);
+  return new THREE.CanvasTexture(c);
+}
+
+const SPARK_MAX = 700;
+const sparkGeo = new THREE.BufferGeometry();
+const sparkPos = new Float32Array(SPARK_MAX * 3);
+const sparkAlpha = new Float32Array(SPARK_MAX);
+const sparkSize = new Float32Array(SPARK_MAX);
+sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+sparkGeo.setAttribute('aAlpha', new THREE.BufferAttribute(sparkAlpha, 1));
+sparkGeo.setAttribute('aSize', new THREE.BufferAttribute(sparkSize, 1));
+const sparkMat = new THREE.ShaderMaterial({
+  uniforms: { map: { value: makeStarTexture() }, uScale: { value: 1 }, uTint: { value: new THREE.Color(0xffffff) } },
+  vertexShader: `
+    attribute float aAlpha;
+    attribute float aSize;
+    varying float vAlpha;
+    uniform float uScale;
+    void main() {
+      vAlpha = aAlpha;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * uScale / -mv.z;   // world-size points with perspective
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    uniform sampler2D map;
+    uniform vec3 uTint;
+    varying float vAlpha;
+    void main() {
+      vec4 t = texture2D(map, gl_PointCoord);
+      gl_FragColor = vec4(uTint, t.a * vAlpha);
+    }`,
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+});
+const sparks = new THREE.Points(sparkGeo, sparkMat);
+sparks.frustumCulled = false;
+scene.add(sparks);
+// pool of particles: angle on the ring, radius at birth, age/life, drift, rise, size, spin-free
+const sparkPool = Array.from({ length: SPARK_MAX }, () => ({ alive: false }));
+let sparkDebt = 0;
+function updateSparks(dt, radius, tint) {
+  // emission scales with the circle's circumference so density along the border stays even
+  sparkDebt += dt * Math.min(120, 8 * radius + 6);
+  for (const p of sparkPool) {
+    if (sparkDebt < 1) break;
+    if (p.alive) continue;
+    sparkDebt -= 1;
+    // spread sideways across the ground: mostly outward, some inward, with a little swirl along the ring
+    const out = Math.random() < 0.7 ? 1 : -1;
+    Object.assign(p, {
+      alive: true, age: 0, life: 0.9 + Math.random() * 1.3,
+      a: Math.random() * Math.PI * 2, r: radius,
+      drift: out * (0.6 + Math.random() * 1.2), swirl: (Math.random() - 0.5) * 0.25,
+      rise: Math.random() * 0.12,
+      size: 0.35 + Math.random() * 0.4,
+    });
+  }
+  sparkDebt = Math.min(sparkDebt, 5);
+  for (let i = 0; i < SPARK_MAX; i++) {
+    const p = sparkPool[i];
+    if (p.alive) {
+      p.age += dt;
+      if (p.age >= p.life) p.alive = false;
+    }
+    if (!p.alive) { sparkAlpha[i] = 0; continue; }
+    const k = p.age / p.life;                       // 0 at birth -> 1 at death
+    // ease out: fast burst off the border that slows as it fades; inward sparks never cross the centre
+    const travel = p.drift * p.life * (1 - (1 - k) * (1 - k)) / 2;
+    const rr = Math.max(0.1, p.r + travel);
+    const a = p.a + p.swirl * p.age;
+    sparkPos[i * 3] = Math.cos(a) * rr;
+    sparkPos[i * 3 + 1] = 0.08 + p.rise * p.age;
+    sparkPos[i * 3 + 2] = Math.sin(a) * rr;
+    sparkAlpha[i] = Math.pow(1 - k, 1.6) * Math.min(1, k * 8);   // quick fade-in, long progressive decay
+    sparkSize[i] = p.size * (1 - 0.6 * k);                       // shrink as it fades
+  }
+  sparkGeo.attributes.position.needsUpdate = true;
+  sparkGeo.attributes.aAlpha.needsUpdate = true;
+  sparkGeo.attributes.aSize.needsUpdate = true;
+  sparkMat.uniforms.uTint.value.setHex(tint);
+  sparkMat.uniforms.uScale.value = renderer.getDrawingBufferSize(new THREE.Vector2()).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+}
+
 // ---------- see-through cutout ----------
 // Scenery in front of the player is dithered away (ordered 4x4 Bayer, a raster look) inside a
 // hard-edged circle around the player on screen, so the player shows through
@@ -762,6 +882,8 @@ function render(alpha, now) {
   homeDisc.scale.setScalar(s.radius);
   setRingRadius(s.radius);
   homeRing.material.color.setHex(s.radius < 2 ? 0x5a5a5a : 0xb0b0b0);   // dims when home is nearly gone
+  updateSparks(Math.min((now - (render.lastNow ?? now)) / 1000, 0.1), s.radius, s.radius < 2 ? 0x6a6a6a : 0xffffff);
+  render.lastNow = now;
 
   for (const g of s.ghosts) {
     // hover well off the ground with a slow bob; the blob shadow stays on the floor and breathes with height

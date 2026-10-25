@@ -526,6 +526,19 @@ for (let i = 0; i < 40; i++) {
   r.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3));
 }
 
+// Footprints (XZ boxes) of every map object, so pickups never spawn hidden inside one
+const decorFootprints = [];
+scene.updateMatrixWorld(true);
+scene.traverse(o => {
+  if (!o.isMesh || (o.material !== stoneMat && o.material !== hillMat)) return;
+  const b = new THREE.Box3().setFromObject(o);
+  decorFootprints.push({ minX: b.min.x, maxX: b.max.x, minZ: b.min.z, maxZ: b.max.z });
+});
+// true if a circle of radius r at (x, z) overlaps any map object's footprint
+function onDecor(x, z, r) {
+  return decorFootprints.some(f => x > f.minX - r && x < f.maxX + r && z > f.minZ - r && z < f.maxZ + r);
+}
+
 // ---------- player ----------
 const player = new THREE.Group();
 const body = new THREE.Mesh(new THREE.CapsuleGeometry(CONFIG.playerRadius, 0.6, 4, 12), new THREE.MeshStandardMaterial({ color: 0xd2d2d2 }));
@@ -714,14 +727,15 @@ function newState() {
   };
 }
 
-// Always outside even a max-size home, and not right next to the player
+// Always outside even a max-size home, not right next to the player, and never inside a map object
 function spawnPickup(s) {
   const lim = CONFIG.arena - 2, minR = CONFIG.maxRadius + 2;
   let x = 0, z = 0;
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 300; i++) {
     x = (Math.random() * 2 - 1) * lim;
     z = (Math.random() * 2 - 1) * lim;
-    if (Math.hypot(x, z) >= minR && Math.hypot(x - s.px, z - s.pz) >= CONFIG.pickupMinFromPlayer) break;
+    if (Math.hypot(x, z) >= minR && Math.hypot(x - s.px, z - s.pz) >= CONFIG.pickupMinFromPlayer
+      && !onDecor(x, z, CONFIG.pickupRadius + 0.5)) break;
   }
   s.pickup = { x, z };
 }

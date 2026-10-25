@@ -69,7 +69,7 @@ const CONFIG = window.CONFIG = {
   fullHomeLevelRate: 3,  // level climbs this many times faster while home is full
   ghostSpeedEvery: 10,   // levels per ghost speed-up
   ghostSpeedStep: 0.05,  // +5% ghost speed per step
-  flankLevel1: 10,       // level where one ghost becomes a flanker
+  flankLevel1: 8,        // level where one ghost becomes a flanker
   flankLevel2: 20,       // level where a second one does
   flankAhead: 6,         // flankers aim this far past the player, on the side away from the pack
   flankCommit: 7,        // within this distance a flanker stops circling and goes straight for you
@@ -499,7 +499,7 @@ function awayFromPack(s) {
   return len > 1e-6 ? [dx / len, dz / len] : [0, 1];
 }
 
-// Flankers from level 10 (one) and level 20 (two)
+// Flankers from flankLevel1 (one) and flankLevel2 (two)
 function flankersWanted(level) {
   return level >= CONFIG.flankLevel2 ? 2 : level >= CONFIG.flankLevel1 ? 1 : 0;
 }

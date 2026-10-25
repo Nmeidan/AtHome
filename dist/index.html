@@ -90,7 +90,11 @@ const CONFIG = window.CONFIG = {
   flankShare: 0.5,       // ...or more than this share of all ghosts
   flankSpread: 0.7,      // radians between flankers' approach angles, so they close in like a pincer
   flankAhead: 6,         // flankers aim this far past the player, on the side away from the pack
-  flankCommit: 7,        // within this distance a flanker stops circling and goes straight for you
+  flankCommit: 9,        // within this distance a flanker stops circling and goes straight for you
+  flankSpeed: 1.3,       // flankers are this much faster than regular ghosts
+  flankLead: 0.7,        // seconds ahead of you they aim (they cut off where you're going)
+  flankWaveEvery: 20,    // seconds between ambush waves once flanking has started
+  flankSpawnMin: 12,     // ambushers appear as close as this, just outside the screen
 };
 
 // Ghosts get a little faster every ghostSpeedEvery levels
@@ -623,6 +627,8 @@ function newState() {
     ghosts: [],
     spawnTimer: 0,
     points: 0,
+    vx: 0, vz: 0,        // smoothed player velocity (flankers read it to cut you off)
+    flankWave: 0,        // seconds until the next ambush wave
     pickup: null,        // { x, z }
   };
 }
@@ -654,19 +660,20 @@ function onScreen(x, z) {
 function spawnGhost(s, flank = false) {
   let slot = -1, baseA = null;
   if (flank) {
-    // flankers appear on the far side of the player from the pack, each in its own slot so they fan out
+    // ambushers appear in your path (where you're heading, or away from the pack when you stand still),
+    // each in its own slot so they fan out
     const used = new Set(s.ghosts.filter(g => g.flank).map(g => g.slot));
     slot = 0;
     while (used.has(slot)) slot++;
-    const [dx, dz] = awayFromPack(s);
-    baseA = Math.atan2(dz, dx) + flankOffset(slot);
+    baseA = escapeAngle(s) + flankOffset(slot);
   }
-  // always spawn off screen: try nearby angles/distances first, then anywhere; else take the least visible
+  // always spawn off screen: flankers try close-in spots first (right past the screen edge);
+  // otherwise nearby angles first, then anywhere; failing all that, the least visible spot
   let best = null, bestScore = -Infinity;
   for (let i = 0; i < 60; i++) {
     const spread = baseA === null || i >= 40 ? Math.PI : 0.3 + i * 0.05;
     const a = (baseA ?? 0) + (Math.random() * 2 - 1) * spread;
-    const d = 26 + Math.random() * 10;
+    const d = flank && i < 40 ? CONFIG.flankSpawnMin + i * 0.6 : 26 + Math.random() * 10;
     const x = THREE.MathUtils.clamp(s.px + Math.cos(a) * d, -CONFIG.arena, CONFIG.arena);
     const z = THREE.MathUtils.clamp(s.pz + Math.sin(a) * d, -CONFIG.arena, CONFIG.arena);
     if (!onScreen(x, z)) { best = [x, z]; break; }
@@ -675,6 +682,13 @@ function spawnGhost(s, flank = false) {
   }
   const [x, z] = best;
   s.ghosts.push({ x, z, flank, slot, camp: 0, wander: Math.random() * Math.PI * 2, sees: true, lastX: s.px, lastZ: s.pz, mesh: makeGhostMesh() });
+}
+
+// Direction you're escaping in: your heading when moving, else away from the pack
+function escapeAngle(s) {
+  if (Math.hypot(s.vx, s.vz) > 2) return Math.atan2(s.vz, s.vx);
+  const [dx, dz] = awayFromPack(s);
+  return Math.atan2(dz, dx);
 }
 
 // Unit vector from the regular ghosts' centre toward (and past) the player
@@ -700,6 +714,10 @@ function reset() {
 reset();
 window.getState = () => state;   // debug: inspect the sim from devtools
 window.getScene = () => scene;   // debug: inspect scene objects from devtools
+window.getCamera = () => camera; // debug: inspect / place the camera from devtools
+window.simSeconds = (sec, each) => {   // debug: advance the sim by fixed steps (each() runs before every step)
+  for (let i = 0; i < Math.round(sec / DT); i++) { each?.(state); step(state, DT); }
+};
 
 // ---------- input ----------
 const keys = new Set();
@@ -819,6 +837,7 @@ function step(s, dt) {
   s.level = levelAt(s.levelProgress);
 
   // player movement, relative to the mouse pointer: W/up toward it, S/down away, A/D strafe
+  const prevX = s.px, prevZ = s.pz;
   const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
   const side = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
   const aim = pointerSeen && pointerOnGround();
@@ -838,6 +857,9 @@ function step(s, dt) {
       }
     }
   }
+  // smoothed velocity, so flankers can read where you're heading
+  s.vx += ((s.px - prevX) / dt - s.vx) * 0.15;
+  s.vz += ((s.pz - prevZ) / dt - s.vz) * 0.15;
 
   // home radius: shrink inside, grow outside scaled by distance beyond the edge
   const pd = Math.hypot(s.px, s.pz);
@@ -874,8 +896,23 @@ function step(s, dt) {
     scene.remove(s.ghosts.splice(far, 1)[0].mesh);
     spawnGhost(s, true);
   }
-  const [awayX, awayZ] = awayFromPack(s);
-  const awayA = Math.atan2(awayZ, awayX);
+  // ambush waves: every flankWaveEvery seconds, flankers that aren't already on you re-appear
+  // just off screen in your path, so the pressure comes back just as things settle down
+  if (flankersWanted(s) > 0) {
+    s.flankWave -= dt;
+    if (s.flankWave <= 0) {
+      s.flankWave = CONFIG.flankWaveEvery;
+      for (const g of s.ghosts.filter(g => g.flank)) {
+        if (Math.hypot(g.x - s.px, g.z - s.pz) < CONFIG.flankCommit * 1.5) continue;
+        scene.remove(g.mesh);
+        s.ghosts.splice(s.ghosts.indexOf(g), 1);
+        spawnGhost(s, true);
+      }
+    }
+  }
+  // flankers aim where you'll be, not where you are
+  const leadX = s.px + s.vx * CONFIG.flankLead, leadZ = s.pz + s.vz * CONFIG.flankLead;
+  const awayA = escapeAngle(s);
 
   // ghosts: chase what they can see, search where they last saw you, wander otherwise;
   // can't enter home; get bored camping the edge
@@ -893,13 +930,13 @@ function step(s, dt) {
       speed *= 0.5;
     }
     if (g.flank) {
-      // flankers always know where you are: each circles to its own point on the far side
-      // (fanned out by slot, like a pincer), then closes in from there
+      // flankers always know where you are and where you're heading: each heads for its own point in
+      // your path (fanned out by slot, like a pincer), then goes straight for where you'll be
       const near = Math.hypot(s.px - g.x, s.pz - g.z) < CONFIG.flankCommit;
       const fa = awayA + flankOffset(g.slot);
-      tx = (near ? s.px : s.px + Math.cos(fa) * CONFIG.flankAhead) - g.x;
-      tz = (near ? s.pz : s.pz + Math.sin(fa) * CONFIG.flankAhead) - g.z;
-      speed = ghostSpeedAt(s.level);
+      tx = (near ? leadX : leadX + Math.cos(fa) * CONFIG.flankAhead) - g.x;
+      tz = (near ? leadZ : leadZ + Math.sin(fa) * CONFIG.flankAhead) - g.z;
+      speed = ghostSpeedAt(s.level) * CONFIG.flankSpeed;
     }
     if (s.inside) {
       const gd = Math.hypot(g.x, g.z);

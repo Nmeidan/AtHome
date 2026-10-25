@@ -163,19 +163,22 @@ scene.add(homeDisc);
 
 // Look of the home circle's edge: hairline border + rising particles. Tunable live in the ` panel.
 const EDGE = window.EDGE = {
-  gray: 176,          // 0-255, border and particle color
+  // values tuned in the panel (2026-10-25)
+  gray: 220,          // 0-255, border and particle color
   ringPx: 1.5,        // border width in screen pixels
-  ringOpacity: 0.55,
-  ratePerUnit: 32,    // particles per second per unit of circle radius...
-  rateBase: 24,       // ...plus this many
-  rateMax: 480,
-  lifeMin: 0.7, lifeMax: 0.9,     // seconds
-  riseMin: 0.35, riseMax: 0.7,    // how high they float before fading
-  drift: 0,           // sideways speed off the border (+ outward, - inward)
-  spread: 0.06,       // how far from the exact border they're born
-  sizeMin: 0.18, sizeMax: 0.38,
-  shrink: 0.6,        // fraction of size lost by the end of life
-  fade: 1.6,          // higher = fades out sooner
+  ringOpacity: 0.35,
+  ratePerUnit: 200,   // particles per second per unit of circle radius...
+  rateBase: 200,      // ...plus this many
+  rateMax: 1040,
+  lifeMin: 2.05, lifeMax: 2.3,    // seconds
+  riseMin: 1.8, riseMax: 2.1,     // how high they float before fading
+  riseCurve: 2,       // 1 = steady rise; higher = linger at the source then speed up (flame: densest at the bottom)
+  speed: 1,           // playback speed of each particle's rise and fade (2 = twice as fast over the same path)
+  drift: -0.45,       // sideways speed off the border (+ outward, - inward)
+  spread: 0.13,       // how far from the exact border they're born
+  sizeMin: 0.02, sizeMax: 0.13,
+  shrink: 1,          // fraction of size lost by the end of life
+  fade: 2.8,          // higher = fades out sooner
   opacity: 1,
 };
 
@@ -236,7 +239,7 @@ function makeStarTexture() {
   return new THREE.CanvasTexture(c);
 }
 
-const SPARK_MAX = 4000;   // pool big enough for the panel's top settings
+const SPARK_MAX = 9000;   // pool big enough for the panel's top settings (max rate x max life)
 const sparkGeo = new THREE.BufferGeometry();
 const sparkPos = new Float32Array(SPARK_MAX * 3);
 const sparkAlpha = new Float32Array(SPARK_MAX);
@@ -278,7 +281,8 @@ let sparkDebt = 0;
 function updateSparks(dt, radius, tint) {
   // emission scales with the circle's circumference so density along the border stays even
   const E = EDGE, between = (lo, hi) => lo + Math.random() * Math.max(0, hi - lo);
-  sparkDebt += dt * Math.min(E.rateMax, E.ratePerUnit * radius + E.rateBase);
+  const rate = Math.min(E.rateMax, E.ratePerUnit * radius + E.rateBase);
+  sparkDebt += dt * rate;
   for (const p of sparkPool) {
     if (sparkDebt < 1) break;
     if (p.alive) continue;
@@ -291,17 +295,19 @@ function updateSparks(dt, radius, tint) {
       size: between(E.sizeMin, E.sizeMax),
     });
   }
-  sparkDebt = Math.min(sparkDebt, 20);
+  // carry over at most ~a quarter second of backlog (a fixed small cap used to drop particles at high rates)
+  sparkDebt = Math.min(sparkDebt, rate * 0.25 + 1);
   for (let i = 0; i < SPARK_MAX; i++) {
     const p = sparkPool[i];
     if (p.alive) {
-      p.age += dt;
+      p.age += dt * E.speed;
       if (p.age >= p.life) p.alive = false;
     }
     if (!p.alive) { sparkAlpha[i] = 0; continue; }
     const k = p.age / p.life;                       // 0 at birth -> 1 at death
-    // rise (and drift) easing out, so each dot only travels a short way before it's gone
-    const ease = 1 - (1 - k) * (1 - k);
+    // rise (and drift) along that curve
+    // riseCurve > 1: dots linger near the border and speed up as they climb, so the source is densest (flame)
+    const ease = Math.pow(k, E.riseCurve);
     const rr = Math.max(0.05, p.r + E.drift * p.life * ease);
     sparkPos[i * 3] = Math.cos(p.a) * rr;
     sparkPos[i * 3 + 1] = 0.08 + p.rise * ease;
@@ -753,9 +759,10 @@ addEventListener('keyup', e => keys.delete(e.code));
 const EDGE_DEFAULTS = { ...EDGE };
 const TUNE_SPEC = [
   ['gray', 'Color', 0, 255, 1], ['ringPx', 'Border px', 0, 6, 0.5], ['ringOpacity', 'Border alpha', 0, 1, 0.05],
-  ['ratePerUnit', 'Rate / radius', 0, 200, 1], ['rateBase', 'Rate base', 0, 200, 1], ['rateMax', 'Rate max', 0, 3000, 10],
+  ['ratePerUnit', 'Rate / radius', 0, 600, 5], ['rateBase', 'Rate base', 0, 600, 5], ['rateMax', 'Rate max', 0, 3000, 10],
   ['lifeMin', 'Life min', 0.1, 3, 0.05], ['lifeMax', 'Life max', 0.1, 3, 0.05],
-  ['riseMin', 'Rise min', 0, 3, 0.05], ['riseMax', 'Rise max', 0, 3, 0.05],
+  ['riseMin', 'Rise min', 0, 3, 0.05], ['riseMax', 'Rise max', 0, 3, 0.05], ['riseCurve', 'Base density', 0.5, 4, 0.1],
+  ['speed', 'Speed', 0.25, 4, 0.05],
   ['drift', 'Drift', -3, 3, 0.05], ['spread', 'Spread', 0, 1, 0.01],
   ['sizeMin', 'Size min', 0.02, 1.5, 0.01], ['sizeMax', 'Size max', 0.02, 1.5, 0.01],
   ['shrink', 'Shrink', 0, 1, 0.05], ['fade', 'Fade', 0.2, 5, 0.1], ['opacity', 'Opacity', 0, 1, 0.05],

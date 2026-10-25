@@ -666,12 +666,17 @@ function spawnGhost(s, flank = false) {
     slot = 0;
     while (used.has(slot)) slot++;
     baseA = escapeAngle(s) + flankOffset(slot);
+  } else if (Math.hypot(s.vx, s.vz) > 2) {
+    // regular ghosts come from behind you while you're moving: appearing in your path is the flankers' job,
+    // so extra ghosts before the flank level never feel like an ambush
+    baseA = Math.atan2(-s.vz, -s.vx);
   }
+  const nearSpread = flank ? null : Math.PI / 2;   // regulars stay within the half behind you
   // always spawn off screen: flankers try close-in spots first (right past the screen edge);
   // otherwise nearby angles first, then anywhere; failing all that, the least visible spot
   let best = null, bestScore = -Infinity;
   for (let i = 0; i < 60; i++) {
-    const spread = baseA === null || i >= 40 ? Math.PI : 0.3 + i * 0.05;
+    const spread = baseA === null || i >= 40 ? Math.PI : nearSpread ?? 0.3 + i * 0.05;
     const a = (baseA ?? 0) + (Math.random() * 2 - 1) * spread;
     const d = flank && i < 40 ? CONFIG.flankSpawnMin + i * 0.6 : 26 + Math.random() * 10;
     const x = THREE.MathUtils.clamp(s.px + Math.cos(a) * d, -CONFIG.arena, CONFIG.arena);

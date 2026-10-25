@@ -39,7 +39,7 @@
   <span>ghosts <span id="ghostCount">0</span></span>
 </div>
 <div id="tune" class="hidden">
-  <h2>Home edge · ` to close</h2>
+  <h2>Tuning · ` to close</h2>
   <div id="tuneRows"></div>
   <button id="tuneCopy">Copy settings</button><button id="tuneReset">Reset</button>
   <span id="tuneMsg" style="color:var(--dim)"></span>
@@ -544,6 +544,94 @@ playerBlob.position.y = 0.03;
 player.add(playerBlob);
 scene.add(player);
 
+// ---------- player light trail (Akira tail-light streak): a camera-facing ribbon that tapers and fades ----------
+const TRAIL = window.TRAIL = {
+  gray: 235,        // 0-255
+  life: 0.55,       // seconds a point of the streak lasts (= trail length at a given speed)
+  width: 0.55,      // width at the player
+  taper: 1.4,       // higher = narrows faster toward the tail
+  opacity: 0.85,
+  fade: 1.6,        // higher = tail fades sooner
+  softness: 0.6,    // 0 = hard-edged band, 1 = very soft glow across the width
+  height: 1.35,     // height of the streak above the ground (the body centre is ~1.6)
+};
+const TRAIL_MAX = 160;
+const trailPts = [];   // newest first: { x, y, z, t }
+const trailGeo = new THREE.BufferGeometry();
+const trailPos = new Float32Array(TRAIL_MAX * 2 * 3);
+const trailA = new Float32Array(TRAIL_MAX * 2);   // fade along the streak
+const trailV = new Float32Array(TRAIL_MAX * 2);   // 0 / 1 across the width (for the soft edge)
+for (let i = 0; i < TRAIL_MAX; i++) { trailV[i * 2] = 0; trailV[i * 2 + 1] = 1; }
+const trailIdx = [];
+for (let i = 0; i < TRAIL_MAX - 1; i++) {
+  const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+  trailIdx.push(a, b, c, b, d, c);
+}
+trailGeo.setIndex(trailIdx);
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+trailGeo.setAttribute('aAlpha', new THREE.BufferAttribute(trailA, 1));
+trailGeo.setAttribute('aV', new THREE.BufferAttribute(trailV, 1));
+const trailMat = new THREE.ShaderMaterial({
+  uniforms: { uColor: { value: new THREE.Color(0xffffff) }, uSoft: { value: 0.6 } },
+  vertexShader: `
+    attribute float aAlpha;
+    attribute float aV;
+    varying float vAlpha;
+    varying float vV;
+    void main() {
+      vAlpha = aAlpha; vV = aV;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: `
+    uniform vec3 uColor;
+    uniform float uSoft;
+    varying float vAlpha;
+    varying float vV;
+    void main() {
+      // bright core with a soft glow falling off to both edges
+      float d = abs(vV * 2.0 - 1.0);
+      float edge = 1.0 - smoothstep(1.0 - max(uSoft, 0.001), 1.0, d);
+      float core = 1.0 - smoothstep(0.0, 0.35, d);
+      gl_FragColor = vec4(uColor, vAlpha * edge * (0.65 + 0.35 * core));
+    }`,
+  transparent: true,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+  blending: THREE.AdditiveBlending,
+});
+const trail = new THREE.Mesh(trailGeo, trailMat);
+trail.frustumCulled = false;
+scene.add(trail);
+const trailSide = new THREE.Vector3(), trailTan = new THREE.Vector3(), trailView = new THREE.Vector3();
+function updateTrail(nowSec, x, y, z) {
+  const T = TRAIL;
+  // add a point when the player has moved (or the streak is empty), drop points older than life
+  const head = trailPts[0];
+  if (!head || Math.hypot(x - head.x, z - head.z) > 0.04) trailPts.unshift({ x, y, z, t: nowSec });
+  else { head.x = x; head.y = y; head.z = z; }
+  while (trailPts.length > TRAIL_MAX || (trailPts.length && nowSec - trailPts[trailPts.length - 1].t > T.life)) trailPts.pop();
+  const n = trailPts.length;
+  for (let i = 0; i < TRAIL_MAX; i++) {
+    const p = trailPts[Math.min(i, n - 1)];
+    if (!p || i >= n) { trailA[i * 2] = trailA[i * 2 + 1] = 0; continue; }
+    // tangent along the streak, side vector perpendicular to it and to the view direction
+    const q = trailPts[Math.min(i + 1, n - 1)], o = trailPts[Math.max(i - 1, 0)];
+    trailTan.set(o.x - q.x, o.y - q.y, o.z - q.z);
+    if (trailTan.lengthSq() < 1e-8) trailTan.set(1, 0, 0);
+    trailView.set(camera.position.x - p.x, camera.position.y - p.y, camera.position.z - p.z);
+    trailSide.crossVectors(trailTan, trailView).normalize();
+    const age = Math.min(1, (nowSec - p.t) / T.life);
+    const w = T.width * 0.5 * Math.pow(1 - age, T.taper);
+    trailPos.set([p.x + trailSide.x * w, p.y + trailSide.y * w, p.z + trailSide.z * w], i * 6);
+    trailPos.set([p.x - trailSide.x * w, p.y - trailSide.y * w, p.z - trailSide.z * w], i * 6 + 3);
+    trailA[i * 2] = trailA[i * 2 + 1] = T.opacity * Math.pow(1 - age, T.fade);
+  }
+  trailGeo.attributes.position.needsUpdate = true;
+  trailGeo.attributes.aAlpha.needsUpdate = true;
+  trailMat.uniforms.uColor.value.setHex(Math.round(T.gray) * 0x010101);
+  trailMat.uniforms.uSoft.value = T.softness;
+}
+
 // ---------- ghosts ----------
 const GHOST_COLOR = 0x707070;   // all ghosts share one gray, a shade lighter than the furniture
 function makeGhostMesh() {
@@ -778,9 +866,8 @@ function setGhostMax(n) {
 }
 addEventListener('keyup', e => keys.delete(e.code));
 
-// ---------- tuning panel (` key): live sliders for EDGE, copy the result as JSON ----------
-const EDGE_DEFAULTS = { ...EDGE };
-const TUNE_SPEC = [
+// ---------- tuning panel (` key): live sliders for EDGE and TRAIL, copy the result as JSON ----------
+const EDGE_SPEC = [
   ['gray', 'Color', 0, 255, 1], ['ringPx', 'Border px', 0, 6, 0.5], ['ringOpacity', 'Border alpha', 0, 1, 0.05],
   ['ratePerUnit', 'Rate / radius', 0, 600, 5], ['rateBase', 'Rate base', 0, 600, 5], ['rateMax', 'Rate max', 0, 3000, 10],
   ['lifeMin', 'Life min', 0.1, 3, 0.05], ['lifeMax', 'Life max', 0.1, 3, 0.05],
@@ -790,28 +877,46 @@ const TUNE_SPEC = [
   ['sizeMin', 'Size min', 0.02, 1.5, 0.01], ['sizeMax', 'Size max', 0.02, 1.5, 0.01],
   ['shrink', 'Shrink', 0, 1, 0.05], ['fade', 'Fade', 0.2, 5, 0.1], ['opacity', 'Opacity', 0, 1, 0.05],
 ];
+const TRAIL_SPEC = [
+  ['gray', 'Color', 0, 255, 1], ['opacity', 'Opacity', 0, 1, 0.05], ['life', 'Length (s)', 0.05, 2, 0.05],
+  ['width', 'Width', 0.02, 2, 0.01], ['taper', 'Taper', 0, 4, 0.1], ['fade', 'Fade', 0.2, 5, 0.1],
+  ['softness', 'Softness', 0, 1, 0.05], ['height', 'Height', 0, 3, 0.05],
+];
+const TUNE_GROUPS = [
+  { name: 'Home edge', key: 'EDGE', obj: EDGE, spec: EDGE_SPEC, defaults: { ...EDGE } },
+  { name: 'Player trail', key: 'TRAIL', obj: TRAIL, spec: TRAIL_SPEC, defaults: { ...TRAIL } },
+];
 const tunePanel = document.getElementById('tune');
 const tuneRows = document.getElementById('tuneRows');
 const tuneMsg = document.getElementById('tuneMsg');
-const tuneOutputs = {};
-for (const [key, label, min, max, step] of TUNE_SPEC) {
-  const row = document.createElement('label');
-  row.innerHTML = `<span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}"><output></output>`;
-  const input = row.querySelector('input'), out = row.querySelector('output');
-  input.value = EDGE[key];
-  out.textContent = EDGE[key];
-  input.addEventListener('input', () => { EDGE[key] = Number(input.value); out.textContent = input.value; });
-  // keep slider keys (arrows) from also moving the player
-  input.addEventListener('keydown', e => e.stopPropagation());
-  tuneOutputs[key] = { input, out };
-  tuneRows.appendChild(row);
+const tuneOutputs = [];
+for (const group of TUNE_GROUPS) {
+  const h = document.createElement('h2');
+  h.textContent = group.name;
+  h.style.marginTop = '14px';
+  tuneRows.appendChild(h);
+  for (const [key, label, min, max, step] of group.spec) {
+    const row = document.createElement('label');
+    row.innerHTML = `<span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}"><output></output>`;
+    const input = row.querySelector('input'), out = row.querySelector('output');
+    input.value = group.obj[key];
+    out.textContent = group.obj[key];
+    input.addEventListener('input', () => { group.obj[key] = Number(input.value); out.textContent = input.value; });
+    // keep slider keys (arrows) from also moving the player
+    input.addEventListener('keydown', e => e.stopPropagation());
+    tuneOutputs.push({ obj: group.obj, key, input, out });
+    tuneRows.appendChild(row);
+  }
 }
 function syncTune() {
-  for (const [key] of TUNE_SPEC) { tuneOutputs[key].input.value = EDGE[key]; tuneOutputs[key].out.textContent = EDGE[key]; }
+  for (const t of tuneOutputs) { t.input.value = t.obj[t.key]; t.out.textContent = t.obj[t.key]; }
 }
-document.getElementById('tuneReset').addEventListener('click', () => { Object.assign(EDGE, EDGE_DEFAULTS); syncTune(); });
+document.getElementById('tuneReset').addEventListener('click', () => {
+  for (const g of TUNE_GROUPS) Object.assign(g.obj, g.defaults);
+  syncTune();
+});
 document.getElementById('tuneCopy').addEventListener('click', async () => {
-  const text = 'EDGE settings: ' + JSON.stringify(EDGE);
+  const text = 'Settings: ' + JSON.stringify(Object.fromEntries(TUNE_GROUPS.map(g => [g.key, g.obj])));
   try { await navigator.clipboard.writeText(text); tuneMsg.textContent = 'Copied'; }
   catch {
     // clipboard blocked (e.g. inside an iframe): show the text so it can be copied by hand
@@ -1002,6 +1107,7 @@ function render(alpha, now) {
   // hover: capsule bottom sits ~0.8 above the floor, bobbing out of phase with the ghosts
   const pbob = Math.sin(now / 340);
   body.position.y = 1.6 + pbob * 0.15;
+  updateTrail(now / 1000, s.px, TRAIL.height + pbob * 0.15, s.pz);
   playerBlob.scale.setScalar(1 - pbob * 0.12);
   playerBlob.material.opacity = 0.4 - pbob * 0.08;
   homeDisc.scale.setScalar(s.radius);

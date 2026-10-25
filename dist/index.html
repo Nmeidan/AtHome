@@ -552,6 +552,9 @@ const TRAIL = window.TRAIL = {
   fade: 1.4,        // higher = fades out sooner
   shrink: 0.15,     // fraction of size lost by the time a copy disappears
   gray: 210,        // 0-255, copy body color
+  maxCopies: 40,    // most copies alive at once (oldest is reused first)
+  eyes: 1,          // copies' eye opacity, relative to the body (0 = no eyes)
+  rise: 0,          // how far a copy floats up while it fades (negative sinks)
 };
 const ECHO_MAX = 40;
 const echoes = [];
@@ -586,11 +589,14 @@ function updateTrail(dt) {
   const moved = Math.hypot(here.x - echoLast.x, here.z - echoLast.z);
   if (moved > 3) echoLast = here;   // a jump (restart / teleport): start fresh, don't draw across it
   else if (moved >= T.spacing) {
+    const cap = Math.max(1, Math.min(ECHO_MAX, Math.round(T.maxCopies)));
+    if (echoNext >= cap) echoNext = 0;
     const h = echoes[echoNext];
-    echoNext = (echoNext + 1) % ECHO_MAX;
+    echoNext = (echoNext + 1) % cap;
     h.position.copy(player.position);
     h.rotation.copy(player.rotation);
     h.userData.body.position.copy(body.position);
+    h.userData.baseY = body.position.y;
     h.userData.age = 0;
     h.userData.alive = true;
     h.visible = true;
@@ -604,10 +610,12 @@ function updateTrail(dt) {
     if (k >= 1) { h.userData.alive = false; h.visible = false; continue; }
     const a = T.opacity * Math.pow(1 - k, T.fade);
     h.scale.setScalar(1 - T.shrink * k);
+    h.userData.body.position.y = h.userData.baseY + T.rise * k;
     h.userData.body.traverse(o => {
       if (!o.isMesh) return;
-      o.material.opacity = a;
-      if (o === h.userData.body) o.material.color.setHex(bodyHex);   // eyes keep their own color
+      const isBody = o === h.userData.body;
+      o.material.opacity = isBody ? a : a * T.eyes;
+      if (isBody) o.material.color.setHex(bodyHex);   // eyes keep their own color
     });
   }
 }
@@ -862,6 +870,7 @@ const TRAIL_SPEC = [
   ['spacing', 'Spacing', 0.1, 3, 0.05], ['life', 'Life (s)', 0.05, 2, 0.05],
   ['opacity', 'Opacity', 0, 1, 0.05], ['fade', 'Fade', 0.2, 5, 0.1],
   ['shrink', 'Shrink', 0, 1, 0.05], ['gray', 'Color', 0, 255, 1],
+  ['maxCopies', 'Max copies', 1, 40, 1], ['eyes', 'Eyes', 0, 1, 0.05], ['rise', 'Rise', -2, 3, 0.05],
 ];
 const TUNE_GROUPS = [
   { name: 'Home edge', key: 'EDGE', obj: EDGE, spec: EDGE_SPEC, defaults: { ...EDGE } },

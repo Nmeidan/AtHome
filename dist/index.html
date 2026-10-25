@@ -544,92 +544,65 @@ playerBlob.position.y = 0.03;
 player.add(playerBlob);
 scene.add(player);
 
-// ---------- player light trail (Akira tail-light streak): a camera-facing ribbon that tapers and fades ----------
+// ---------- afterimages: the player leaves dim, fading copies of itself along its path ----------
 const TRAIL = window.TRAIL = {
-  gray: 235,        // 0-255
-  life: 0.55,       // seconds a point of the streak lasts (= trail length at a given speed)
-  width: 0.55,      // width at the player
-  taper: 1.4,       // higher = narrows faster toward the tail
-  opacity: 0.85,
-  fade: 1.6,        // higher = tail fades sooner
-  softness: 0.6,    // 0 = hard-edged band, 1 = very soft glow across the width
-  height: 1.35,     // height of the streak above the ground (the body centre is ~1.6)
+  spacing: 0.55,    // distance moved between copies
+  life: 0.5,        // seconds each copy takes to fade out
+  opacity: 0.35,    // starting opacity of a copy
+  fade: 1.4,        // higher = fades out sooner
+  shrink: 0.15,     // fraction of size lost by the time a copy disappears
+  gray: 210,        // 0-255, copy body color
 };
-const TRAIL_MAX = 160;
-const trailPts = [];   // newest first: { x, y, z, t }
-const trailGeo = new THREE.BufferGeometry();
-const trailPos = new Float32Array(TRAIL_MAX * 2 * 3);
-const trailA = new Float32Array(TRAIL_MAX * 2);   // fade along the streak
-const trailV = new Float32Array(TRAIL_MAX * 2);   // 0 / 1 across the width (for the soft edge)
-for (let i = 0; i < TRAIL_MAX; i++) { trailV[i * 2] = 0; trailV[i * 2 + 1] = 1; }
-const trailIdx = [];
-for (let i = 0; i < TRAIL_MAX - 1; i++) {
-  const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
-  trailIdx.push(a, b, c, b, d, c);
+const ECHO_MAX = 40;
+const echoes = [];
+for (let i = 0; i < ECHO_MAX; i++) {
+  // a copy of the player's body (eyes included) with its own see-through materials
+  const e = body.clone(true);
+  e.traverse(o => {
+    if (!o.isMesh) return;
+    o.material = o.material.clone();
+    o.material.transparent = true;
+    o.material.depthWrite = false;
+    o.castShadow = false;
+  });
+  const holder = new THREE.Group();
+  holder.add(e);
+  holder.visible = false;
+  holder.userData = { age: 0, alive: false, body: e };
+  scene.add(holder);
+  echoes.push(holder);
 }
-trailGeo.setIndex(trailIdx);
-trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
-trailGeo.setAttribute('aAlpha', new THREE.BufferAttribute(trailA, 1));
-trailGeo.setAttribute('aV', new THREE.BufferAttribute(trailV, 1));
-const trailMat = new THREE.ShaderMaterial({
-  uniforms: { uColor: { value: new THREE.Color(0xffffff) }, uSoft: { value: 0.6 } },
-  vertexShader: `
-    attribute float aAlpha;
-    attribute float aV;
-    varying float vAlpha;
-    varying float vV;
-    void main() {
-      vAlpha = aAlpha; vV = aV;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }`,
-  fragmentShader: `
-    uniform vec3 uColor;
-    uniform float uSoft;
-    varying float vAlpha;
-    varying float vV;
-    void main() {
-      // bright core with a soft glow falling off to both edges
-      float d = abs(vV * 2.0 - 1.0);
-      float edge = 1.0 - smoothstep(1.0 - max(uSoft, 0.001), 1.0, d);
-      float core = 1.0 - smoothstep(0.0, 0.35, d);
-      gl_FragColor = vec4(uColor, vAlpha * edge * (0.65 + 0.35 * core));
-    }`,
-  transparent: true,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-  blending: THREE.AdditiveBlending,
-});
-const trail = new THREE.Mesh(trailGeo, trailMat);
-trail.frustumCulled = false;
-scene.add(trail);
-const trailSide = new THREE.Vector3(), trailTan = new THREE.Vector3(), trailView = new THREE.Vector3();
-function updateTrail(nowSec, x, y, z) {
+let echoLast = null, echoNext = 0;
+function updateTrail(dt) {
   const T = TRAIL;
-  // add a point when the player has moved (or the streak is empty), drop points older than life
-  const head = trailPts[0];
-  if (!head || Math.hypot(x - head.x, z - head.z) > 0.04) trailPts.unshift({ x, y, z, t: nowSec });
-  else { head.x = x; head.y = y; head.z = z; }
-  while (trailPts.length > TRAIL_MAX || (trailPts.length && nowSec - trailPts[trailPts.length - 1].t > T.life)) trailPts.pop();
-  const n = trailPts.length;
-  for (let i = 0; i < TRAIL_MAX; i++) {
-    const p = trailPts[Math.min(i, n - 1)];
-    if (!p || i >= n) { trailA[i * 2] = trailA[i * 2 + 1] = 0; continue; }
-    // tangent along the streak, side vector perpendicular to it and to the view direction
-    const q = trailPts[Math.min(i + 1, n - 1)], o = trailPts[Math.max(i - 1, 0)];
-    trailTan.set(o.x - q.x, o.y - q.y, o.z - q.z);
-    if (trailTan.lengthSq() < 1e-8) trailTan.set(1, 0, 0);
-    trailView.set(camera.position.x - p.x, camera.position.y - p.y, camera.position.z - p.z);
-    trailSide.crossVectors(trailTan, trailView).normalize();
-    const age = Math.min(1, (nowSec - p.t) / T.life);
-    const w = T.width * 0.5 * Math.pow(1 - age, T.taper);
-    trailPos.set([p.x + trailSide.x * w, p.y + trailSide.y * w, p.z + trailSide.z * w], i * 6);
-    trailPos.set([p.x - trailSide.x * w, p.y - trailSide.y * w, p.z - trailSide.z * w], i * 6 + 3);
-    trailA[i * 2] = trailA[i * 2 + 1] = T.opacity * Math.pow(1 - age, T.fade);
+  // drop a copy each time the player has moved `spacing` since the last one
+  const here = { x: player.position.x, z: player.position.z };
+  if (!echoLast) echoLast = here;
+  if (Math.hypot(here.x - echoLast.x, here.z - echoLast.z) >= T.spacing) {
+    const h = echoes[echoNext];
+    echoNext = (echoNext + 1) % ECHO_MAX;
+    h.position.copy(player.position);
+    h.rotation.copy(player.rotation);
+    h.userData.body.position.copy(body.position);
+    h.userData.age = 0;
+    h.userData.alive = true;
+    h.visible = true;
+    echoLast = here;
   }
-  trailGeo.attributes.position.needsUpdate = true;
-  trailGeo.attributes.aAlpha.needsUpdate = true;
-  trailMat.uniforms.uColor.value.setHex(Math.round(T.gray) * 0x010101);
-  trailMat.uniforms.uSoft.value = T.softness;
+  const bodyHex = Math.round(T.gray) * 0x010101;
+  for (const h of echoes) {
+    if (!h.userData.alive) continue;
+    h.userData.age += dt;
+    const k = h.userData.age / Math.max(T.life, 0.01);
+    if (k >= 1) { h.userData.alive = false; h.visible = false; continue; }
+    const a = T.opacity * Math.pow(1 - k, T.fade);
+    h.scale.setScalar(1 - T.shrink * k);
+    h.userData.body.traverse(o => {
+      if (!o.isMesh) return;
+      o.material.opacity = a;
+      if (o === h.userData.body) o.material.color.setHex(bodyHex);   // eyes keep their own color
+    });
+  }
 }
 
 // ---------- ghosts ----------
@@ -878,13 +851,13 @@ const EDGE_SPEC = [
   ['shrink', 'Shrink', 0, 1, 0.05], ['fade', 'Fade', 0.2, 5, 0.1], ['opacity', 'Opacity', 0, 1, 0.05],
 ];
 const TRAIL_SPEC = [
-  ['gray', 'Color', 0, 255, 1], ['opacity', 'Opacity', 0, 1, 0.05], ['life', 'Length (s)', 0.05, 2, 0.05],
-  ['width', 'Width', 0.02, 2, 0.01], ['taper', 'Taper', 0, 4, 0.1], ['fade', 'Fade', 0.2, 5, 0.1],
-  ['softness', 'Softness', 0, 1, 0.05], ['height', 'Height', 0, 3, 0.05],
+  ['spacing', 'Spacing', 0.1, 3, 0.05], ['life', 'Life (s)', 0.05, 2, 0.05],
+  ['opacity', 'Opacity', 0, 1, 0.05], ['fade', 'Fade', 0.2, 5, 0.1],
+  ['shrink', 'Shrink', 0, 1, 0.05], ['gray', 'Color', 0, 255, 1],
 ];
 const TUNE_GROUPS = [
   { name: 'Home edge', key: 'EDGE', obj: EDGE, spec: EDGE_SPEC, defaults: { ...EDGE } },
-  { name: 'Player trail', key: 'TRAIL', obj: TRAIL, spec: TRAIL_SPEC, defaults: { ...TRAIL } },
+  { name: 'Player afterimages', key: 'TRAIL', obj: TRAIL, spec: TRAIL_SPEC, defaults: { ...TRAIL } },
 ];
 const tunePanel = document.getElementById('tune');
 const tuneRows = document.getElementById('tuneRows');
@@ -1107,7 +1080,7 @@ function render(alpha, now) {
   // hover: capsule bottom sits ~0.8 above the floor, bobbing out of phase with the ghosts
   const pbob = Math.sin(now / 340);
   body.position.y = 1.6 + pbob * 0.15;
-  updateTrail(now / 1000, s.px, TRAIL.height + pbob * 0.15, s.pz);
+  updateTrail(Math.min((now - (render.lastNow ?? now)) / 1000, 0.1));
   playerBlob.scale.setScalar(1 - pbob * 0.12);
   playerBlob.material.opacity = 0.4 - pbob * 0.08;
   homeDisc.scale.setScalar(s.radius);

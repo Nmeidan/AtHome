@@ -27,6 +27,8 @@
   #tune output { text-align: right; color: var(--ink); }
   #tune button { margin: 10px 8px 0 0; padding: 6px 10px; font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--ink); background: #2a2a2a; border: 1px solid #555; cursor: pointer; }
   #tune button:hover { background: #333; }
+  #tuneToggle { position: fixed; right: 16px; bottom: 16px; z-index: 11; padding: 6px 10px; font: inherit; font-size: 10px; letter-spacing: .12em; text-transform: inherit; color: var(--dim); background: rgba(18,18,18,.8); border: 1px solid #444; cursor: pointer; }
+  #tuneToggle:hover { color: var(--ink); }
 </style>
 </head>
 <body>
@@ -38,8 +40,9 @@
   <span id="where">HOME</span>
   <span>ghosts <span id="ghostCount">0</span></span>
 </div>
+<button id="tuneToggle">Tune</button>
 <div id="tune" class="hidden">
-  <h2>Tuning · ` to close</h2>
+  <h2>Tuning · Tune button or ` to close</h2>
   <div id="tuneRows"></div>
   <button id="tuneCopy">Copy settings</button><button id="tuneReset">Reset</button>
   <span id="tuneMsg" style="color:var(--dim)"></span>
@@ -914,8 +917,11 @@ document.getElementById('tuneCopy').addEventListener('click', async () => {
   }
   setTimeout(() => { tuneMsg.textContent = ''; }, 1500);
 });
+// open/close: the Tune button, or the key left of 1 (` on US keyboards, § / IntlBackslash on many Mac/ISO ones)
+const tuneToggle = document.getElementById('tuneToggle');
+tuneToggle.addEventListener('click', e => { tunePanel.classList.toggle('hidden'); tuneToggle.blur(); });
 addEventListener('keydown', e => {
-  if (e.code === 'Backquote') tunePanel.classList.toggle('hidden');
+  if (e.code === 'Backquote' || e.code === 'IntlBackslash') tunePanel.classList.toggle('hidden');
 });
 
 function start() {

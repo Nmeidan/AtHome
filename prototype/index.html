@@ -69,6 +69,10 @@ const CONFIG = window.CONFIG = {
   fullHomeLevelRate: 3,  // level climbs this many times faster while home is full
   ghostSpeedEvery: 10,   // levels per ghost speed-up
   ghostSpeedStep: 0.05,  // +5% ghost speed per step
+  flankLevel1: 10,       // level where one ghost becomes a flanker
+  flankLevel2: 20,       // level where a second one does
+  flankAhead: 6,         // flankers aim this far past the player, on the side away from the pack
+  flankCommit: 7,        // within this distance a flanker stops circling and goes straight for you
 };
 
 // Ghosts get a little faster every ghostSpeedEvery levels
@@ -473,12 +477,31 @@ function spawnPickup(s) {
   s.pickup = { x, z };
 }
 
-function spawnGhost(s) {
-  const a = Math.random() * Math.PI * 2;
+function spawnGhost(s, flank = false) {
+  let a = Math.random() * Math.PI * 2;
+  if (flank) {
+    // flankers appear on the far side of the player from the pack, so they cut off the escape route
+    const [dx, dz] = awayFromPack(s);
+    a = Math.atan2(dz, dx) + (Math.random() - 0.5) * 0.6;
+  }
   const d = 26 + Math.random() * 8;
   const x = THREE.MathUtils.clamp(s.px + Math.cos(a) * d, -CONFIG.arena, CONFIG.arena);
   const z = THREE.MathUtils.clamp(s.pz + Math.sin(a) * d, -CONFIG.arena, CONFIG.arena);
-  s.ghosts.push({ x, z, camp: 0, wander: Math.random() * Math.PI * 2, sees: true, lastX: s.px, lastZ: s.pz, mesh: makeGhostMesh() });
+  s.ghosts.push({ x, z, flank, camp: 0, wander: Math.random() * Math.PI * 2, sees: true, lastX: s.px, lastZ: s.pz, mesh: makeGhostMesh() });
+}
+
+// Unit vector from the regular ghosts' centre toward (and past) the player
+function awayFromPack(s) {
+  let cx = 0, cz = 0, n = 0;
+  for (const g of s.ghosts) if (!g.flank) { cx += g.x; cz += g.z; n++; }
+  if (!n) return [0, 1];
+  const dx = s.px - cx / n, dz = s.pz - cz / n, len = Math.hypot(dx, dz);
+  return len > 1e-6 ? [dx / len, dz / len] : [0, 1];
+}
+
+// Flankers from level 10 (one) and level 20 (two)
+function flankersWanted(level) {
+  return level >= CONFIG.flankLevel2 ? 2 : level >= CONFIG.flankLevel1 ? 1 : 0;
 }
 
 function reset() {
@@ -607,6 +630,18 @@ function step(s, dt) {
     s.spawnTimer = 0;
     spawnGhost(s);
   }
+  // flankers: replace the regular ghost furthest from you with one that spawns on the far side
+  while (s.ghosts.filter(g => g.flank).length < flankersWanted(s.level) && s.ghosts.some(g => !g.flank)) {
+    let far = -1, farD = -1;
+    s.ghosts.forEach((g, i) => {
+      const d = (g.x - s.px) ** 2 + (g.z - s.pz) ** 2;
+      if (!g.flank && d > farD) { farD = d; far = i; }
+    });
+    scene.remove(s.ghosts.splice(far, 1)[0].mesh);
+    spawnGhost(s, true);
+  }
+  const [awayX, awayZ] = awayFromPack(s);
+  const flankX = s.px + awayX * CONFIG.flankAhead, flankZ = s.pz + awayZ * CONFIG.flankAhead;
 
   // ghosts: chase what they can see, search where they last saw you, wander otherwise;
   // can't enter home; get bored camping the edge
@@ -622,6 +657,13 @@ function step(s, dt) {
       // reached the last sighting and you're not there: wander
       tx = Math.cos(g.wander); tz = Math.sin(g.wander);
       speed *= 0.5;
+    }
+    if (g.flank) {
+      // flankers always know where you are: circle round to the far side, then close in from there
+      const near = Math.hypot(s.px - g.x, s.pz - g.z) < CONFIG.flankCommit;
+      tx = (near ? s.px : flankX) - g.x;
+      tz = (near ? s.pz : flankZ) - g.z;
+      speed = ghostSpeedAt(s.level);
     }
     if (s.inside) {
       const gd = Math.hypot(g.x, g.z);

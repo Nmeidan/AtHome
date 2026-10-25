@@ -79,7 +79,7 @@ const CONFIG = window.CONFIG = {
   boredAfter: 3,         // seconds a ghost camps the edge before drifting off
   pickupRadius: 0.6,
   pickupMinFromPlayer: 8,
-  pickupBoost: 1.5,      // home radius gained per point collected
+  pickupBoost: 0.6,      // home radius gained per point collected (was 1.5)
   levelMin: 2,           // no maximum: the level keeps climbing
   levelEvery: 20,        // seconds outside per difficulty level at normal pace
   levelsPerGhost: 2,     // one extra ghost every N levels above level 1
@@ -879,6 +879,7 @@ const TRAIL_SPEC = [
 ];
 const HOME_SPEC = [
   ['growK', 'Grow speed', 0, 0.3, 0.005], ['shrinkRate', 'Shrink speed', 0, 1.5, 0.01],
+  ['pickupBoost', 'Pickup boost', 0, 4, 0.05],
 ];
 const TUNE_GROUPS = [
   { name: 'Home circle', key: 'HOME', obj: CONFIG, spec: HOME_SPEC },

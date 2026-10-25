@@ -19,6 +19,14 @@
   #overlay h1 { margin: 0; font-weight: 400; font-size: 48px; letter-spacing: normal; color: var(--home); }
   #overlay p { margin: 0; color: var(--dim); max-width: 1000px; font-size: 13px; line-height: 1.7; }
   .hidden { display: none !important; }
+  /* tuning panel, toggled with the ` key */
+  #tune { position: fixed; top: 56px; right: 16px; width: 300px; max-height: calc(100% - 72px); overflow-y: auto; padding: 12px 14px; background: rgba(18,18,18,.92); border: 1px solid #3a3a3a; font-size: 10px; letter-spacing: .08em; z-index: 10; }
+  #tune h2 { margin: 0 0 10px; font-size: 11px; font-weight: 400; color: var(--ink); }
+  #tune label { display: grid; grid-template-columns: 92px 1fr 44px; gap: 8px; align-items: center; margin: 6px 0; color: var(--dim); }
+  #tune input[type=range] { width: 100%; accent-color: #b0b0b0; }
+  #tune output { text-align: right; color: var(--ink); }
+  #tune button { margin: 10px 8px 0 0; padding: 6px 10px; font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--ink); background: #2a2a2a; border: 1px solid #555; cursor: pointer; }
+  #tune button:hover { background: #333; }
 </style>
 </head>
 <body>
@@ -29,6 +37,12 @@
   <span>home <div id="bar" style="display:inline-block;vertical-align:middle"><div id="barFill"></div></div></span>
   <span id="where">HOME</span>
   <span>ghosts <span id="ghostCount">0</span></span>
+</div>
+<div id="tune" class="hidden">
+  <h2>Home edge · ` to close</h2>
+  <div id="tuneRows"></div>
+  <button id="tuneCopy">Copy settings</button><button id="tuneReset">Reset</button>
+  <span id="tuneMsg" style="color:var(--dim)"></span>
 </div>
 <div id="overlay">
   <h1>@Home</h1>
@@ -147,8 +161,25 @@ homeDisc.rotation.x = -Math.PI / 2;
 homeDisc.position.y = 0.02;
 scene.add(homeDisc);
 
-// Border: a hairline ~1.5 screen pixels wide at any circle size (geometry rebuilt when size changes)
-const RING_PX = 1.5;
+// Look of the home circle's edge: hairline border + rising particles. Tunable live in the ` panel.
+const EDGE = window.EDGE = {
+  gray: 176,          // 0-255, border and particle color
+  ringPx: 1.5,        // border width in screen pixels
+  ringOpacity: 0.55,
+  ratePerUnit: 32,    // particles per second per unit of circle radius...
+  rateBase: 24,       // ...plus this many
+  rateMax: 480,
+  lifeMin: 0.7, lifeMax: 0.9,     // seconds
+  riseMin: 0.35, riseMax: 0.7,    // how high they float before fading
+  drift: 0,           // sideways speed off the border (+ outward, - inward)
+  spread: 0.06,       // how far from the exact border they're born
+  sizeMin: 0.18, sizeMax: 0.38,
+  shrink: 0.6,        // fraction of size lost by the end of life
+  fade: 1.6,          // higher = fades out sooner
+  opacity: 1,
+};
+
+// Border: a hairline EDGE.ringPx screen pixels wide at any circle size (geometry rebuilt when size changes)
 const homeRing = new THREE.Mesh(
   new THREE.RingGeometry(0.99, 1, 192),
   new THREE.MeshBasicMaterial({ color: 0xb0b0b0, transparent: true, opacity: 0.55, depthWrite: false })
@@ -160,7 +191,7 @@ scene.add(homeRing);
 function setRing(r) {
   // world units per screen pixel at the camera's distance from the player
   const perPx = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * CAM_OFFSET.length() / innerHeight;
-  const w = RING_PX * perPx, u = homeRing.userData;
+  const w = EDGE.ringPx * perPx, u = homeRing.userData;
   if (Math.abs(r - u.r) < 0.005 && Math.abs(w - u.w) < w * 0.02) return;
   homeRing.geometry.dispose();
   homeRing.geometry = new THREE.RingGeometry(Math.max(r - w, 0), r, 192);
@@ -205,7 +236,7 @@ function makeStarTexture() {
   return new THREE.CanvasTexture(c);
 }
 
-const SPARK_MAX = 700;
+const SPARK_MAX = 4000;   // pool big enough for the panel's top settings
 const sparkGeo = new THREE.BufferGeometry();
 const sparkPos = new Float32Array(SPARK_MAX * 3);
 const sparkAlpha = new Float32Array(SPARK_MAX);
@@ -246,20 +277,21 @@ const sparkPool = Array.from({ length: SPARK_MAX }, () => ({ alive: false }));
 let sparkDebt = 0;
 function updateSparks(dt, radius, tint) {
   // emission scales with the circle's circumference so density along the border stays even
-  sparkDebt += dt * Math.min(170, 11 * radius + 8);
+  const E = EDGE, between = (lo, hi) => lo + Math.random() * Math.max(0, hi - lo);
+  sparkDebt += dt * Math.min(E.rateMax, E.ratePerUnit * radius + E.rateBase);
   for (const p of sparkPool) {
     if (sparkDebt < 1) break;
     if (p.alive) continue;
     sparkDebt -= 1;
-    // born right on the border, rise straight up a short way, gone in ~0.8s
+    // born on the border, rise a short way (and drift sideways if set), then gone
     Object.assign(p, {
-      alive: true, age: 0, life: 0.7 + Math.random() * 0.2,
-      a: Math.random() * Math.PI * 2, r: radius + (Math.random() - 0.5) * 0.06,
-      rise: 0.35 + Math.random() * 0.35,
-      size: 0.18 + Math.random() * 0.2,
+      alive: true, age: 0, life: Math.max(0.05, between(E.lifeMin, E.lifeMax)),
+      a: Math.random() * Math.PI * 2, r: radius + (Math.random() - 0.5) * E.spread,
+      rise: between(E.riseMin, E.riseMax),
+      size: between(E.sizeMin, E.sizeMax),
     });
   }
-  sparkDebt = Math.min(sparkDebt, 5);
+  sparkDebt = Math.min(sparkDebt, 20);
   for (let i = 0; i < SPARK_MAX; i++) {
     const p = sparkPool[i];
     if (p.alive) {
@@ -268,12 +300,14 @@ function updateSparks(dt, radius, tint) {
     }
     if (!p.alive) { sparkAlpha[i] = 0; continue; }
     const k = p.age / p.life;                       // 0 at birth -> 1 at death
-    // straight up, easing out, so each dot only lifts a short way before it's gone
-    sparkPos[i * 3] = Math.cos(p.a) * p.r;
-    sparkPos[i * 3 + 1] = 0.08 + p.rise * (1 - (1 - k) * (1 - k));
-    sparkPos[i * 3 + 2] = Math.sin(p.a) * p.r;
-    sparkAlpha[i] = Math.pow(1 - k, 1.6) * Math.min(1, k * 8);   // quick fade-in, long progressive decay
-    sparkSize[i] = p.size * (1 - 0.6 * k);                       // shrink as it fades
+    // rise (and drift) easing out, so each dot only travels a short way before it's gone
+    const ease = 1 - (1 - k) * (1 - k);
+    const rr = Math.max(0.05, p.r + E.drift * p.life * ease);
+    sparkPos[i * 3] = Math.cos(p.a) * rr;
+    sparkPos[i * 3 + 1] = 0.08 + p.rise * ease;
+    sparkPos[i * 3 + 2] = Math.sin(p.a) * rr;
+    sparkAlpha[i] = E.opacity * Math.pow(1 - k, E.fade) * Math.min(1, k * 8);   // quick fade-in, progressive decay
+    sparkSize[i] = p.size * (1 - E.shrink * k);                                // shrink as it fades
   }
   sparkGeo.attributes.position.needsUpdate = true;
   sparkGeo.attributes.aAlpha.needsUpdate = true;
@@ -715,6 +749,50 @@ function setGhostMax(n) {
 }
 addEventListener('keyup', e => keys.delete(e.code));
 
+// ---------- tuning panel (` key): live sliders for EDGE, copy the result as JSON ----------
+const EDGE_DEFAULTS = { ...EDGE };
+const TUNE_SPEC = [
+  ['gray', 'Color', 0, 255, 1], ['ringPx', 'Border px', 0, 6, 0.5], ['ringOpacity', 'Border alpha', 0, 1, 0.05],
+  ['ratePerUnit', 'Rate / radius', 0, 200, 1], ['rateBase', 'Rate base', 0, 200, 1], ['rateMax', 'Rate max', 0, 3000, 10],
+  ['lifeMin', 'Life min', 0.1, 3, 0.05], ['lifeMax', 'Life max', 0.1, 3, 0.05],
+  ['riseMin', 'Rise min', 0, 3, 0.05], ['riseMax', 'Rise max', 0, 3, 0.05],
+  ['drift', 'Drift', -3, 3, 0.05], ['spread', 'Spread', 0, 1, 0.01],
+  ['sizeMin', 'Size min', 0.02, 1.5, 0.01], ['sizeMax', 'Size max', 0.02, 1.5, 0.01],
+  ['shrink', 'Shrink', 0, 1, 0.05], ['fade', 'Fade', 0.2, 5, 0.1], ['opacity', 'Opacity', 0, 1, 0.05],
+];
+const tunePanel = document.getElementById('tune');
+const tuneRows = document.getElementById('tuneRows');
+const tuneMsg = document.getElementById('tuneMsg');
+const tuneOutputs = {};
+for (const [key, label, min, max, step] of TUNE_SPEC) {
+  const row = document.createElement('label');
+  row.innerHTML = `<span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}"><output></output>`;
+  const input = row.querySelector('input'), out = row.querySelector('output');
+  input.value = EDGE[key];
+  out.textContent = EDGE[key];
+  input.addEventListener('input', () => { EDGE[key] = Number(input.value); out.textContent = input.value; });
+  // keep slider keys (arrows) from also moving the player
+  input.addEventListener('keydown', e => e.stopPropagation());
+  tuneOutputs[key] = { input, out };
+  tuneRows.appendChild(row);
+}
+function syncTune() {
+  for (const [key] of TUNE_SPEC) { tuneOutputs[key].input.value = EDGE[key]; tuneOutputs[key].out.textContent = EDGE[key]; }
+}
+document.getElementById('tuneReset').addEventListener('click', () => { Object.assign(EDGE, EDGE_DEFAULTS); syncTune(); });
+document.getElementById('tuneCopy').addEventListener('click', async () => {
+  const text = 'EDGE settings: ' + JSON.stringify(EDGE);
+  try { await navigator.clipboard.writeText(text); tuneMsg.textContent = 'Copied'; }
+  catch {
+    // clipboard blocked (e.g. inside an iframe): show the text so it can be copied by hand
+    prompt('Copy these settings:', text);
+  }
+  setTimeout(() => { tuneMsg.textContent = ''; }, 1500);
+});
+addEventListener('keydown', e => {
+  if (e.code === 'Backquote') tunePanel.classList.toggle('hidden');
+});
+
 function start() {
   reset();
   state.phase = 'playing';
@@ -880,8 +958,12 @@ function render(alpha, now) {
   homeDisc.scale.setScalar(s.radius);
   // hairline border plus rising dots, both in the same gray; dims when home is nearly gone
   setRing(s.radius);
-  homeRing.material.color.setHex(s.radius < 2 ? 0x5a5a5a : 0xb0b0b0);
-  updateSparks(Math.min((now - (render.lastNow ?? now)) / 1000, 0.1), s.radius, s.radius < 2 ? 0x5a5a5a : 0xb0b0b0);
+  const edgeGray = Math.round(EDGE.gray * (s.radius < 2 ? 0.5 : 1));   // half as bright when home is nearly gone
+  const edgeHex = edgeGray * 0x010101;
+  homeRing.material.color.setHex(edgeHex);
+  homeRing.material.opacity = EDGE.ringOpacity;
+  homeRing.visible = EDGE.ringOpacity > 0 && EDGE.ringPx > 0;
+  updateSparks(Math.min((now - (render.lastNow ?? now)) / 1000, 0.1), s.radius, edgeHex);
   render.lastNow = now;
 
   for (const g of s.ghosts) {

@@ -640,8 +640,20 @@ function updateTrail(dt) {
 
 // ---------- ghosts ----------
 const GHOST_COLOR = 0x707070;   // all ghosts share one gray, a shade lighter than the furniture
-function makeGhostMesh() {
+const hornMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a });
+function makeGhostMesh(flank = false) {
   const g = new THREE.Group();
+  if (flank) {
+    // flankers wear horns: two small cones on the crown, tilted outward
+    for (const sx of [-1, 1]) {
+      // base sits on the dome's surface (head centre y 0.9, radius 0.55 -> ~1.39 at x 0.26), tip sticks up and out
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.5, 10), hornMat);
+      horn.position.set(sx * 0.3, 1.58, 0.02);
+      horn.rotation.z = -sx * 0.5;
+      horn.castShadow = true;
+      g.add(horn);
+    }
+  }
   // own material per ghost so each can dim independently when it loses track of you
   const mat = new THREE.MeshStandardMaterial({ color: GHOST_COLOR, emissive: GHOST_COLOR, emissiveIntensity: 0.25, side: THREE.DoubleSide });
   const head = new THREE.Mesh(new THREE.SphereGeometry(CONFIG.ghostRadius, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat);
@@ -781,7 +793,7 @@ function spawnGhost(s, flank = false) {
     if (score > bestScore) { bestScore = score; best = [x, z]; }
   }
   const [x, z] = best;
-  s.ghosts.push({ x, z, flank, slot, camp: 0, wander: Math.random() * Math.PI * 2, sees: true, lastX: s.px, lastZ: s.pz, mesh: makeGhostMesh() });
+  s.ghosts.push({ x, z, flank, slot, camp: 0, wander: Math.random() * Math.PI * 2, sees: true, lastX: s.px, lastZ: s.pz, mesh: makeGhostMesh(flank) });
 }
 
 // Direction you're escaping in: your heading when moving, else away from the pack

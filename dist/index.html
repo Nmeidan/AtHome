@@ -573,12 +573,19 @@ for (let i = 0; i < ECHO_MAX; i++) {
   echoes.push(holder);
 }
 let echoLast = null, echoNext = 0;
+// wipe every afterimage (called at the start of each game)
+function resetTrail() {
+  for (const h of echoes) { h.userData.alive = false; h.visible = false; }
+  echoLast = null;
+}
 function updateTrail(dt) {
   const T = TRAIL;
   // drop a copy each time the player has moved `spacing` since the last one
   const here = { x: player.position.x, z: player.position.z };
   if (!echoLast) echoLast = here;
-  if (Math.hypot(here.x - echoLast.x, here.z - echoLast.z) >= T.spacing) {
+  const moved = Math.hypot(here.x - echoLast.x, here.z - echoLast.z);
+  if (moved > 3) echoLast = here;   // a jump (restart / teleport): start fresh, don't draw across it
+  else if (moved >= T.spacing) {
     const h = echoes[echoNext];
     echoNext = (echoNext + 1) % ECHO_MAX;
     h.position.copy(player.position);
@@ -776,6 +783,7 @@ function flankersWanted(s) {
 function reset() {
   if (state) for (const g of state.ghosts) scene.remove(g.mesh);
   state = newState();
+  resetTrail();   // every game starts with no afterimages
 }
 reset();
 window.getState = () => state;   // debug: inspect the sim from devtools

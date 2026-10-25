@@ -65,7 +65,7 @@ const CONFIG = window.CONFIG = {
   arena: 38,
   playerSpeed: 7,
   playerRadius: 0.5,
-  startRadius: 6,
+  startRadius: 7.5,      // a bit roomy, so you notice it shrinking before it gets tight
   minRadius: 0.6,        // home never vanishes; at this size you're effectively exposed
   maxRadius: 14,
   shrinkRate: 0.4,       // units/s while inside
@@ -893,7 +893,7 @@ const TRAIL_SPEC = [
 ];
 const HOME_SPEC = [
   ['growK', 'Grow speed', 0, 0.3, 0.005], ['shrinkRate', 'Shrink speed', 0, 1.5, 0.01],
-  ['pickupBoost', 'Pickup boost', 0, 4, 0.05],
+  ['pickupBoost', 'Pickup boost', 0, 4, 0.05], ['startRadius', 'Start size', 1, 14, 0.25],
 ];
 const TUNE_GROUPS = [
   { name: 'Home circle', key: 'HOME', obj: CONFIG, spec: HOME_SPEC },

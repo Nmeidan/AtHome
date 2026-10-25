@@ -69,7 +69,7 @@ const CONFIG = window.CONFIG = {
   minRadius: 0.6,        // home never vanishes; at this size you're effectively exposed
   maxRadius: 14,
   shrinkRate: 0.4,       // units/s while inside
-  growK: 0.13,           // growth per second per unit of distance beyond the edge
+  growK: 0.045,          // growth per second per unit of distance beyond the edge (was 0.13: much slower now)
   growDistCap: 8,        // distance beyond which growth stops increasing
   rateScale: 2,          // multiplies shrink + grow
   ghostSpeed: 4.6,
@@ -877,10 +877,17 @@ const TRAIL_SPEC = [
   ['shrink', 'Shrink', 0, 1, 0.05], ['gray', 'Color', 0, 255, 1],
   ['maxCopies', 'Max copies', 1, 40, 1], ['eyes', 'Eyes', 0, 1, 0.05], ['rise', 'Rise', -2, 3, 0.05],
 ];
-const TUNE_GROUPS = [
-  { name: 'Home edge', key: 'EDGE', obj: EDGE, spec: EDGE_SPEC, defaults: { ...EDGE } },
-  { name: 'Player afterimages', key: 'TRAIL', obj: TRAIL, spec: TRAIL_SPEC, defaults: { ...TRAIL } },
+const HOME_SPEC = [
+  ['growK', 'Grow speed', 0, 0.3, 0.005], ['shrinkRate', 'Shrink speed', 0, 1.5, 0.01],
 ];
+const TUNE_GROUPS = [
+  { name: 'Home circle', key: 'HOME', obj: CONFIG, spec: HOME_SPEC },
+  { name: 'Home edge', key: 'EDGE', obj: EDGE, spec: EDGE_SPEC },
+  { name: 'Player afterimages', key: 'TRAIL', obj: TRAIL, spec: TRAIL_SPEC },
+];
+// defaults, reset and copy all cover only each group's sliders (CONFIG holds much more than these)
+const pickSpec = g => Object.fromEntries(g.spec.map(([k]) => [k, g.obj[k]]));
+for (const g of TUNE_GROUPS) g.defaults = pickSpec(g);
 const tunePanel = document.getElementById('tune');
 const tuneRows = document.getElementById('tuneRows');
 const tuneMsg = document.getElementById('tuneMsg');
@@ -911,7 +918,7 @@ document.getElementById('tuneReset').addEventListener('click', () => {
   syncTune();
 });
 document.getElementById('tuneCopy').addEventListener('click', async () => {
-  const text = 'Settings: ' + JSON.stringify(Object.fromEntries(TUNE_GROUPS.map(g => [g.key, g.obj])));
+  const text = 'Settings: ' + JSON.stringify(Object.fromEntries(TUNE_GROUPS.map(g => [g.key, pickSpec(g)])));
   try { await navigator.clipboard.writeText(text); tuneMsg.textContent = 'Copied'; }
   catch {
     // clipboard blocked (e.g. inside an iframe): show the text so it can be copied by hand

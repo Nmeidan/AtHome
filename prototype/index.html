@@ -27,8 +27,9 @@
   #tune output { text-align: right; color: var(--ink); }
   #tune button { margin: 10px 8px 0 0; padding: 6px 10px; font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--ink); background: #2a2a2a; border: 1px solid #555; cursor: pointer; }
   #tune button:hover { background: #333; }
-  #tuneToggle { position: fixed; right: 16px; bottom: 16px; z-index: 11; padding: 6px 10px; font: inherit; font-size: 10px; letter-spacing: .12em; text-transform: inherit; color: var(--dim); background: rgba(18,18,18,.8); border: 1px solid #444; cursor: pointer; }
-  #tuneToggle:hover { color: var(--ink); }
+  #tuneToggle { position: fixed; right: 16px; top: 12px; z-index: 11; padding: 8px 14px; font: inherit; font-size: 12px; letter-spacing: .12em; text-transform: inherit; color: var(--ink); background: #2a2a2a; border: 1px solid #8c8c8c; cursor: pointer; }
+  #tuneToggle:hover { background: #3a3a3a; }
+  #tune { top: 52px; }
 </style>
 </head>
 <body>
@@ -549,15 +550,16 @@ scene.add(player);
 
 // ---------- afterimages: the player leaves dim, fading copies of itself along its path ----------
 const TRAIL = window.TRAIL = {
-  spacing: 0.55,    // distance moved between copies
+  // values tuned in the panel (2026-10-25)
+  spacing: 0.95,    // distance moved between copies
   life: 0.5,        // seconds each copy takes to fade out
-  opacity: 0.35,    // starting opacity of a copy
-  fade: 1.4,        // higher = fades out sooner
+  opacity: 0.85,    // starting opacity of a copy
+  fade: 2.6,        // higher = fades out sooner
   shrink: 0.15,     // fraction of size lost by the time a copy disappears
-  gray: 210,        // 0-255, copy body color
+  gray: 255,        // 0-255, copy body color
   maxCopies: 40,    // most copies alive at once (oldest is reused first)
-  eyes: 1,          // copies' eye opacity, relative to the body (0 = no eyes)
-  rise: 0,          // how far a copy floats up while it fades (negative sinks)
+  eyes: 0.15,       // copies' eye opacity, relative to the body (0 = no eyes)
+  rise: 0.15,       // how far a copy floats up while it fades (negative sinks)
 };
 const ECHO_MAX = 40;
 const echoes = [];
@@ -920,6 +922,8 @@ document.getElementById('tuneCopy').addEventListener('click', async () => {
 // open/close: the Tune button, or the key left of 1 (` on US keyboards, § / IntlBackslash on many Mac/ISO ones)
 const tuneToggle = document.getElementById('tuneToggle');
 tuneToggle.addEventListener('click', e => { tunePanel.classList.toggle('hidden'); tuneToggle.blur(); });
+// the Tune button is a dev tool: only shown when running locally, never in the published game
+if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname)) tuneToggle.remove();
 addEventListener('keydown', e => {
   if (e.code === 'Backquote' || e.code === 'IntlBackslash') tunePanel.classList.toggle('hidden');
 });
